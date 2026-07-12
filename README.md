@@ -119,6 +119,7 @@ VLM. REST, SuffixDecoding, SAM, and ASAM share one reusable token-only `SuffixIn
 | `anpd` | adaptive n-gram draft length |
 | `lookahead` | multi-candidate n-gram pool |
 | `logit_spec` | verifier-logit candidates extended by n-gram retrieval |
+| `ngram_trie` | prompt n-gram continuation trie with deep tree branches |
 | `token_recycling` | tree drafts from the verifier's own logits |
 | `rest` | retrieval from a static datastore |
 | `suffix_decoding` | online suffix index over global and per-request history |

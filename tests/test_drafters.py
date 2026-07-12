@@ -206,3 +206,18 @@ def test_logit_spec_prefers_logits_cached_for_the_matching_context():
     d.observe([5], logits)
 
     assert d.propose(first, 0, budget=2).token_ids[:2] == [5, 2]
+
+
+def test_ngram_trie_preserves_branching_continuations_below_a_context_prefix():
+    """A trie keeps both complete in-context futures, rather than selecting one
+    continuation after the first branch as the suffix-index drafters do."""
+    from dejavuu.drafters import NGramTrie
+
+    d = NGramTrie(prefix=3, continuation=3)
+    prompt = [1, 2, 3, 9, 10, 1, 2, 3, 7, 8, 1, 2, 3]
+    d.reset(prompt)
+
+    tree = d.propose_tree(prompt, 0, budget=6, width=2)
+    children = {tree.token_ids[i]: i for i in tree.children(0)}
+    assert set(children) == {7, 9}
+    assert tree.token_ids[tree.children(children[9])[0]] == 10
