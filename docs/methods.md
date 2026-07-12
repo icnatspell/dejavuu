@@ -114,9 +114,10 @@ tree mode recursively branches across several recent followers.
 - **Verification:** Cacheback never accepts its own tokens. The shared greedy verifier
   checks each copied path and emits a target-model correction at the first mismatch, so
   the text path remains lossless under greedy decoding.
-- **Deliberate difference from the paper:** this first integration begins with an empty
-  online cache. It does not load the paper's optional frozen, corpus-built cache tables;
-  that is an **offline** artifact and should be evaluated separately from hot-path gains.
+- **Frozen-table option:** `Cacheback.from_frozen(path)` loads a versioned,
+  tokenizer-specific table built offline with `python -m
+  dejavuu.tools.build_cacheback_table`. Loading is an **online-once** cost, not a
+  decode hot-path gain; benchmark cold, frozen, and warm modes separately.
 - **Drawback:** it is cold at the beginning of a process and has only local online
   evidence. Small cache capacities can evict useful patterns; large capacities trade
   memory for fewer evictions.

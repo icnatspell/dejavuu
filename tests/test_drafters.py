@@ -1,5 +1,7 @@
 """Fast, model-free checks of the suffix-match core and retrieval drafters."""
 
+import json
+
 import numpy as np
 
 from dejavuu.core.engine import generate as _generate
@@ -92,6 +94,33 @@ def test_cacheback_is_lossless_under_chain_and_tree_verification():
         generated = _generate(_Toy(), [0], 30, Cacheback(leader_len=2, follower_len=2), tree=tree)
         assert generated.tokens == baseline.tokens
         assert generated.accepted > 0
+
+
+def test_cacheback_loads_a_versioned_frozen_table_once(tmp_path):
+    from dejavuu.drafters import Cacheback
+
+    table = tmp_path / "cacheback.json"
+    table.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "method": "cacheback",
+                "leader_len": 2,
+                "follower_len": 2,
+                "entries": [{"leader": [1, 2], "followers": [[3, 4]]}],
+            }
+        )
+    )
+
+    cacheback = Cacheback.from_frozen(table)
+    assert cacheback.propose([9, 1, 2], past_len=3, budget=4).token_ids == [2, 3, 4]
+
+
+def test_cacheback_frozen_builder_keeps_documents_separate():
+    from dejavuu.tools.build_cacheback_table import build_payload
+
+    payload = build_payload([[1, 2, 3], [4, 5]], tokenizer="test", leader_len=2, follower_len=2)
+    assert payload["entries"] == []  # no pair may span the document boundary
 
 
 def test_rest_ignores_live_ctx_uses_datastore():
