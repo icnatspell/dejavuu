@@ -7,7 +7,9 @@ always a speculative proposal: the shared verifier remains the correctness gate.
 
 from __future__ import annotations
 
+import json
 from collections import OrderedDict
+from pathlib import Path
 
 from dejavuu.drafters.base import Drafter, DraftTree
 
@@ -35,6 +37,36 @@ class Cacheback(Drafter):
         self.cache: OrderedDict[tuple[int, ...], OrderedDict[tuple[int, ...], None]] = OrderedDict()
         self._tail: list[int] = []
 
+    @classmethod
+    def from_frozen(cls, path: str | Path) -> Cacheback:
+        """Load a versioned, tokenizer-specific table once before decoding."""
+        payload = json.loads(Path(path).read_text())
+        if payload.get("schema_version") != 1 or payload.get("method") != "cacheback":
+            raise ValueError("not a Cacheback frozen-table schema v1 artifact")
+        leader_len, follower_len, entries = (
+            payload.get("leader_len"),
+            payload.get("follower_len"),
+            payload.get("entries"),
+        )
+        if (
+            not isinstance(leader_len, int)
+            or not isinstance(follower_len, int)
+            or not isinstance(entries, list)
+        ):
+            raise ValueError("Cacheback artifact needs integer lengths and an entries list")
+        follower_capacity = max((len(entry.get("followers", [])) for entry in entries), default=1)
+        drafter = cls(leader_len, follower_len, max(len(entries), 1), max(follower_capacity, 1))
+        for entry in entries:
+            leader, followers = tuple(entry.get("leader", [])), entry.get("followers", [])
+            if len(leader) != leader_len or not isinstance(followers, list):
+                raise ValueError("Cacheback artifact contains an invalid entry")
+            for follower in followers:
+                follower = tuple(follower)
+                if len(follower) != follower_len:
+                    raise ValueError("Cacheback artifact contains an invalid follower")
+                drafter._put(leader, follower)
+        return drafter
+
     def reset(self, prompt_ids: list[int]) -> None:
         # The cache persists across requests; only the rolling update window is local.
         self._tail = []
@@ -48,19 +80,23 @@ class Cacheback(Drafter):
                 continue
             leader = tuple(self._tail[-needed : -self.follower_len])
             follower = tuple(self._tail[-self.follower_len :])
-            followers = self.cache.get(leader)
-            if followers is None:
-                followers = OrderedDict()
-                self.cache[leader] = followers
-            else:
-                self.cache.move_to_end(leader)
-            followers.pop(follower, None)
-            followers[follower] = None
-            while len(followers) > self.follower_capacity:
-                followers.popitem(last=False)
-            while len(self.cache) > self.leader_capacity:
-                self.cache.popitem(last=False)
+            self._put(leader, follower)
             del self._tail[:-needed]
+
+    def _put(self, leader: tuple[int, ...], follower: tuple[int, ...]) -> None:
+        """Update the bounded two-level LRU table (load and online updates share it)."""
+        followers = self.cache.get(leader)
+        if followers is None:
+            followers = OrderedDict()
+            self.cache[leader] = followers
+        else:
+            self.cache.move_to_end(leader)
+        followers.pop(follower, None)
+        followers[follower] = None
+        while len(followers) > self.follower_capacity:
+            followers.popitem(last=False)
+        while len(self.cache) > self.leader_capacity:
+            self.cache.popitem(last=False)
 
     def _follower(self, leader: tuple[int, ...]) -> tuple[int, ...] | None:
         followers = self.cache.get(leader)

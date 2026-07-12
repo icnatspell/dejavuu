@@ -21,6 +21,7 @@ from tqdm import tqdm
 
 from dejavuu.core import generate
 from dejavuu.decoders.text import Model, download
+from dejavuu.drafters import Cacheback
 from dejavuu.eval.harness import (
     Agg,
     benchmark_metadata,
@@ -112,6 +113,17 @@ def main() -> None:
         default=None,
         help="corpus file (one doc per line) seeding REST / SAM-Decoding's static store",
     )
+    p.add_argument(
+        "--cacheback-frozen",
+        type=Path,
+        default=None,
+        help="versioned Cacheback table; loaded once before the benchmark (cacheback only)",
+    )
+    p.add_argument(
+        "--reset-drafter-per-prompt",
+        action="store_true",
+        help="construct each drafter before each prompt; use to measure cold caches",
+    )
     p.add_argument("--log", type=Path, default=None)
     p.add_argument("--csv", type=Path, default=None)
     p.add_argument(
@@ -144,7 +156,14 @@ def main() -> None:
 
     # One drafter instance per method for the whole run: stateful drafters (REST,
     # SuffixDecoding, Token Recycling) accumulate history across prompts.
-    drafters = {m: make_drafter(m, datastore) for m in methods}
+    drafters = {
+        m: (
+            Cacheback.from_frozen(args.cacheback_frozen)
+            if m == "cacheback" and args.cacheback_frozen
+            else make_drafter(m, datastore)
+        )
+        for m in methods
+    }
     aggs: dict[str, dict[str, Agg]] = {}  # topic -> method -> Agg
     baseline_out: dict[int, list[int]] = {}  # keyed by prompt index for the exactness gate
     baseline_tps: dict[int, float] = {}  # per-prompt baseline tps for the speedup mean
@@ -153,7 +172,15 @@ def main() -> None:
         ids = tok(prompt)["input_ids"]
         results: dict[str, tuple] = {}
         for m in methods:
-            drafter = drafters[m]
+            # Construction happens before timing: frozen-table loading is online-once,
+            # not a decode-loop throughput gain or cost.
+            drafter = (
+                Cacheback.from_frozen(args.cacheback_frozen)
+                if args.reset_drafter_per_prompt and m == "cacheback" and args.cacheback_frozen
+                else make_drafter(m, datastore)
+                if args.reset_drafter_per_prompt
+                else drafters[m]
+            )
             t = time.time()
             r = generate(
                 model,
