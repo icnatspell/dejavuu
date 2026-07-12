@@ -23,6 +23,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
+      contents: write # create the GitHub Release and attach the build artifacts
       id-token: write # required for trusted publishing (OIDC)
     steps:
       - uses: actions/checkout@v5
@@ -34,3 +35,19 @@ jobs:
           VER="$(uv version --short)"
           test "$TAG" = "$VER" || { echo "tag v$TAG != pyproject $VER"; exit 1; }
       - run: uv publish --trusted-publishing always
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          awk -v version="$TAG" '
+            $0 ~ "^## \\[" version "\\]" { capture = 1; next }
+            capture && (/^## \[/ || /^\[[^]]+\]:/) { exit }
+            capture { print }
+          ' CHANGELOG.md > release-notes.md
+          test -s release-notes.md
+          gh release create "v$TAG" \
+            --title "v$TAG" \
+            --notes-file release-notes.md \
+            --verify-tag \
+            dist/*
