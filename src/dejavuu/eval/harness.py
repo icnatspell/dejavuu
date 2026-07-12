@@ -123,6 +123,7 @@ class Agg:
         if len(r.tokens):
             s["ms_out"].append(ddt / len(r.tokens) * 1e3)
             s["submitted_out"].append(r.drafted / len(r.tokens))
+            s["verified_out"].append((r.drafted + r.steps) / len(r.tokens))
         s["prefill"].append(r.prefill_s / st * 1e3)
         s["draft"].append(r.draft_s / st * 1e3)
         s["verify"].append(r.verify_s / st * 1e3)
@@ -198,6 +199,7 @@ def render_table(
         "accept len",
         "accept %",
         "draft/out",
+        "verify in/out",
         "ms/out",
         "root top1",
         "root top5",
@@ -244,6 +246,7 @@ def render_table(
                 _fmt(_mstd(s["alen"]), prec=2),
                 _fmt(_mstd([p * 100 for p in s["apct"]]), prec=0, suffix="%"),
                 _fmt(_mstd(s["submitted_out"]), prec=2),
+                _fmt(_mstd(s["verified_out"]), prec=2),
                 _fmt(_mstd(s["ms_out"]), prec=1),
                 _fmt(_mstd([p * 100 for p in s["root_top1"]]), prec=0, suffix="%"),
                 _fmt(_mstd([p * 100 for p in s["root_top5"]]), prec=0, suffix="%"),
@@ -287,6 +290,8 @@ def render_table(
                         "accept_pct_std",
                         "draft_per_output",
                         "draft_per_output_std",
+                        "verified_per_output",
+                        "verified_per_output_std",
                         "ms_per_output",
                         "ms_per_output_std",
                         "root_top1",
@@ -328,6 +333,7 @@ def render_table(
                             *_pair(s["alen"], 4),
                             *_pair(s["apct"], 4),
                             *_pair(s["submitted_out"], 4),
+                            *_pair(s["verified_out"], 4),
                             *_pair(s["ms_out"], 4),
                             *_pair(s["root_top1"], 4),
                             *_pair(s["root_top5"], 4),
