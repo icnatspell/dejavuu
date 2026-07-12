@@ -114,6 +114,7 @@ VLM. REST, SuffixDecoding, SAM, and ASAM share one reusable token-only `SuffixIn
 |---|---|
 | `baseline` | plain autoregressive, no drafter |
 | `pld` | prompt-lookup: longest suffix match within the context |
+| `copyspec` | earliest matching k-gram continuation copying from prompt/history |
 | `pld_plus` | `pld` plus hidden-state reranking of matches (needs a hidden-emitting decoder; else falls back to `pld`) |
 | `adapld` | `pld_plus` with a semantic fallback, plus a branched tree under `--tree` |
 | `anpd` | adaptive n-gram draft length |

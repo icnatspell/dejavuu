@@ -206,3 +206,21 @@ def test_logit_spec_prefers_logits_cached_for_the_matching_context():
     d.observe([5], logits)
 
     assert d.propose(first, 0, budget=2).token_ids[:2] == [5, 2]
+
+
+def test_copyspec_copies_the_earliest_matching_history_continuation():
+    from dejavuu.drafters import CopySpec
+
+    d = CopySpec(gamma=2)
+    ctx = [1, 2, 9, 1, 2, 7, 1, 2]
+    d.reset(ctx)
+    assert d.propose(ctx, 0, budget=3).token_ids == [2, 9, 1, 2]
+
+
+def test_copyspec_can_copy_a_continuation_added_during_generation():
+    from dejavuu.drafters import CopySpec
+
+    d = CopySpec(gamma=2)
+    d.reset([0])
+    d.update([1, 2, 9, 1, 2])
+    assert d.propose([1, 2], 0, budget=2).token_ids == [2, 9, 1]

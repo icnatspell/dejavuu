@@ -15,6 +15,7 @@ from dejavuu.drafters.adapld import AdaPLD
 from dejavuu.drafters.anpd import ANPD
 from dejavuu.drafters.asam import ASAM
 from dejavuu.drafters.base import Drafter, DraftTree
+from dejavuu.drafters.copyspec import CopySpec
 from dejavuu.drafters.logit_spec import LogitSpec
 from dejavuu.drafters.lookahead import Lookahead
 from dejavuu.drafters.pld_plus import PLDPlus
@@ -42,6 +43,7 @@ class DrafterSpec:
 
 DRAFTERS: dict[str, DrafterSpec] = {
     "pld": DrafterSpec(PLD, doc="prompt-lookup: longest suffix match in the context"),
+    "copyspec": DrafterSpec(CopySpec, doc="earliest k-gram continuation copying"),
     "pld_plus": DrafterSpec(PLDPlus, doc="PLD + hidden-state reranking of matches"),
     "adapld": DrafterSpec(AdaPLD, doc="PLD+ + semantic fallback + branched tree"),
     "anpd": DrafterSpec(ANPD, doc="adaptive n-gram draft length"),
@@ -99,6 +101,7 @@ __all__ = [
     "PLD",
     "REST",
     "AdaPLD",
+    "CopySpec",
     "DraftTree",
     "Drafter",
     "DrafterSpec",

@@ -50,6 +50,16 @@ tokens that followed it as a chain of guesses. Stateless and pure CPU.
 - **Drawback:** the draft length is fixed, so it over-drafts or under-drafts. It only ever
   finds one continuation, and it has nothing to copy on open-ended generation.
 
+### CopySpec, earliest-occurrence continuation copying
+Index fixed-length k-grams from the prompt and emitted history. When the current suffix
+matches, copy the continuation after the *earliest* matching occurrence; new emitted
+tokens extend the copy source for later steps.
+- **Benefit:** targets redundant follow-up turns such as rewrites, corrections, and
+  self-edits, where an earlier response is deliberately reused.
+- **Difference from the paper:** this implementation is the token-only copying component.
+  It omits CopySpec's optional model-drafter fallback so it remains a raw-token drop-in
+  for both DejaVu backends. The verifier still supplies ordinary lossless correction.
+
 ### ANPD, Adaptive N-gram Parallel Decoding
 The same match as PLD, but the draft *length* adapts to recent acceptance. When the last
 draft was fully accepted it grows the length by one (the model might have taken more).
@@ -172,6 +182,7 @@ one pass with tree attention.
 | method | source | match | draft length | tree | needs datastore |
 |---|---|---|---|---|---|
 | PLD | prompt/history | longest n-gram | fixed | no | no |
+| CopySpec | prompt/history | earliest fixed k-gram | fixed | no | no |
 | PLD+ | prompt/history | longest n-gram, hidden-reranked | fixed | no | no (needs hidden states) |
 | AdaPLD | prompt/history + semantic | n-gram or hidden similarity | fixed | yes (branches) | no (needs hidden states) |
 | ANPD | prompt/history | longest n-gram | adaptive | no | no |
