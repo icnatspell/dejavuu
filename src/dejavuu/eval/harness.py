@@ -5,6 +5,7 @@ optional static datastore), and the comparison table."""
 from __future__ import annotations
 
 import csv
+import json
 from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -27,7 +28,22 @@ __all__ = [
     "load_datastore",
     "make_drafter",
     "render_table",
+    "write_run_manifest",
 ]
+
+
+def write_run_manifest(csv_path: Path, metadata: dict[str, object]) -> Path:
+    """Write stable, machine-readable run metadata beside a benchmark CSV.
+
+    A leaderboard must compare like-for-like runs: the CSV holds measured decode
+    metrics, while this sidecar records the model artifact and execution settings
+    that materially affect them. Callers provide explicit values rather than relying
+    on filenames or ambient process state.
+    """
+    manifest = csv_path.with_suffix(".manifest.json")
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    manifest.write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n")
+    return manifest
 
 
 def load_datastore(path: Path, tokenizer) -> list[list[int]]:
