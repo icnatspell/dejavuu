@@ -1,0 +1,60 @@
+default_stages: [pre-commit]
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: check-toml
+      - id: check-yaml
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+      - id: detect-private-key
+      - id: check-added-large-files
+
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.30.1
+    hooks:
+      - id: gitleaks
+
+  - repo: local
+    hooks:
+      - id: ruff-format
+        name: ruff format
+        entry: uv run ruff format --check .
+        language: system
+        pass_filenames: false
+        always_run: true
+
+      - id: ruff
+        name: ruff lint
+        entry: uv run ruff check .
+        language: system
+        pass_filenames: false
+        always_run: true
+
+      - id: pyrefly
+        name: pyrefly
+        entry: uv run --extra vlm --index-strategy unsafe-best-match pyrefly check
+        language: system
+        pass_filenames: false
+        always_run: true
+
+      - id: uv-lock
+        name: uv lock consistency
+        entry: uv lock --check
+        language: system
+        pass_filenames: false
+        always_run: true
+
+      - id: deptry
+        name: dependency hygiene
+        entry: uv run deptry .
+        language: system
+        pass_filenames: false
+        always_run: true
+
+      - id: pytest
+        name: unit tests (offline)
+        entry: uv run pytest --cov=dejavuu
+        language: system
+        pass_filenames: false
+        always_run: true

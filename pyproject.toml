@@ -1,0 +1,158 @@
+[project]
+# The distribution and import package intentionally share the same name.
+name = "dejavuu"
+version = "0.1.0"
+description = "Retrieval-based speculative decoding for ONNX Runtime and Hugging Face transformers"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "icnatspell", email = "spellicnat@gmail.com" }]
+requires-python = ">=3.13"
+keywords = [
+    "speculative-decoding",
+    "onnxruntime",
+    "transformers",
+    "llm",
+    "inference",
+    "retrieval",
+    "training-free",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Operating System :: OS Independent",
+]
+# Base install = the library + text path (import dejavuu, DejaVu.from_pretrained, the
+# `dejavuu` CLI). Floors are conservative lower bounds on the stable APIs actually used,
+# not the newest release. The VLM runtime and the offline model-build toolchain are
+# opt-in extras below, so a plain install stays light and torch-free.
+dependencies = [
+    "huggingface-hub>=0.26",
+    "loguru>=0.7",
+    "numpy>=2.0",
+    "onnxruntime>=1.20",
+    "pydantic>=2.0",
+    "rich>=13.0",
+    "tqdm>=4.66",
+    "transformers>=4.45",
+    "typer>=0.12",
+]
+
+[project.scripts]
+dejavuu = "dejavuu.cli:app"
+
+[project.optional-dependencies]
+# Run any Hugging Face transformers model as a backend (no ONNX export needed).
+hf = ["torch>=2.4"]
+# Run a vision-language model: image preprocessing (torch/torchvision) + PIL decode.
+vlm = ["pillow>=10.0", "torch>=2.4", "torchvision>=0.19"]
+# Reproduce the benchmarks (Spec-Bench / MMSpec harnesses). Vision benches load images.
+bench = ["dejavuu[vlm]"]
+# Offline model-build toolchain (dejavuu.tools.*): ONNX export + weight-only int4/int8
+# quantization. Heavy and build-only, never needed at inference time.
+build = [
+    "dejavuu[vlm]",
+    "onnx>=1.16",
+    "onnxruntime-genai>=0.5",
+    "onnxscript>=0.7",
+    "onnx-ir>=0.1",
+]
+
+[project.urls]
+Homepage = "https://github.com/icnatspell/dejavuu"
+Repository = "https://github.com/icnatspell/dejavuu"
+Issues = "https://github.com/icnatspell/dejavuu/issues"
+
+[build-system]
+requires = ["uv_build>=0.11.21,<0.12.0"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+# Distribution is `dejavuu`, but the import package is `dejavuu`.
+module-name = "dejavuu"
+# Ship the project docs in the sdist (README + LICENSE are included by default).
+source-include = ["CHANGELOG.md", "CONTRIBUTING.md"]
+
+[[tool.uv.index]]
+url = "https://download.pytorch.org/whl/cpu"
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "C4", "PIE", "PT", "RUF", "SIM"]
+ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["S101"]
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Default run is offline & fast: model/integration tests (which download the
+# 270M gemma onnx) are opt-in via `-m model` / `-m integration`.
+addopts = ["-ra", "-m", "not model and not integration"]
+markers = [
+    "integration: test requiring an external runtime or artifact",
+    "model: test requiring a downloaded model artifact",
+]
+
+[tool.coverage.run]
+branch = true
+source = ["dejavuu"]
+# Glue + offline/online-once tooling that needs a real model or renders output;
+# the hot-path logic (core/, drafters/) is what coverage gates.
+omit = [
+    "src/dejavuu/tools/*",
+    "src/dejavuu/decoders/vlm.py",
+    "src/dejavuu/decoders/text.py",
+    "src/dejavuu/decoders/hf.py",
+    "src/dejavuu/eval/*",
+    "src/dejavuu/cli.py",
+    "src/dejavuu/api.py",
+    "src/dejavuu/__main__.py",
+]
+
+[tool.coverage.report]
+fail_under = 90
+show_missing = true
+exclude_lines = [
+    "pragma: no cover",
+    "if __name__ == .__main__.:",  # module self-check guards; _demo bodies run in test_demos
+]
+
+[tool.deptry]
+known_first_party = ["dejavuu"]
+
+[tool.deptry.per_rule_ignores]
+DEP002 = [
+    # self-referencing extras (bench/build depend on dejavuu[vlm]); not an import.
+    "dejavuu",
+    # vlm extra: torch/torchvision preprocess images; imported lazily in the VLM path.
+    "torch",
+    "torchvision",
+    # build extra: the offline export/quantization toolchain (dejavuu.tools). onnxscript
+    # + onnx-ir are transitive of the onnxruntime-genai builder, declared so `[build]`
+    # installs a working toolchain.
+    "onnx",
+    "onnxruntime-genai",
+    "onnxscript",
+    "onnx-ir",
+]
+
+[dependency-groups]
+dev = [
+    "deptry>=0.25.1",
+    "pip-audit>=2.10.1",
+    "prek>=0.4.9",
+    "pyrefly>=1.1.1",
+    "pytest>=9.1.1",
+    "pytest-cov>=7.1.0",
+    "ruff>=0.15.19",
+]

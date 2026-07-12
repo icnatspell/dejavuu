@@ -1,0 +1,49 @@
+name: ci
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v6
+      # vlm extra (torch) so pyrefly can type-check the build-time tools; the
+      # torch cpu index needs unsafe-best-match to resolve numpy.
+      - run: uv sync --locked --all-extras --index-strategy unsafe-best-match
+      # Same suite prek runs locally: ruff, pyrefly, deptry, lock check, offline
+      # pytest+coverage. Model tests (-m model) are opt-in and not run in CI.
+      - run: uv run prek run --all-files
+
+  dependency-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --locked --index-strategy unsafe-best-match
+      - run: uv run pip-audit
+
+  install-smoke:
+    # Build the wheel and install ONLY it (base deps, no extras, no dev group) into a
+    # clean env, then import. Catches a wrong dependency surface before PyPI: the base
+    # library must import with no torch / onnx / pillow.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v6
+      - run: uv build --wheel
+      - run: uv venv /tmp/smoke
+      - run: uv pip install --python /tmp/smoke dist/*.whl
+      - run: |
+          uv run --python /tmp/smoke --no-project python -c "
+          import dejavuu
+          from dejavuu import DejaVu
+          from dejavuu.drafters import DRAFTERS, make_drafter
+          make_drafter('pld')
+          import importlib.util as u
+          assert u.find_spec('torch') is None, 'torch leaked into base install'
+          assert u.find_spec('onnx') is None, 'onnx leaked into base install'
+          print('base wheel imports clean;', len(DRAFTERS), 'drafters')
+          "

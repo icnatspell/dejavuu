@@ -1,0 +1,36 @@
+name: publish
+
+# Publish to PyPI on a version tag (e.g. `git tag v0.1.0 && git push --tags`).
+# Uses PyPI Trusted Publishing (OIDC) -- no stored token. Before the first run, create
+# the project's trusted-publisher config on PyPI: owner `icnatspell`, repo `dejavuu`,
+# workflow `publish.yml`, environment `pypi`. Do a TestPyPI dry run first.
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  # Gate the release on the same suite CI runs on every push.
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --locked --all-extras --index-strategy unsafe-best-match
+      - run: uv run prek run --all-files
+
+  publish:
+    needs: checks
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write # required for trusted publishing (OIDC)
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v6
+      - run: uv build
+      # Fails loudly if the tag and pyproject version disagree.
+      - run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          VER="$(uv version --short)"
+          test "$TAG" = "$VER" || { echo "tag v$TAG != pyproject $VER"; exit 1; }
+      - run: uv publish --trusted-publishing always
