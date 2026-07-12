@@ -50,6 +50,50 @@ def test_suffix_decoding_drafts_within_prompt():
     assert tree.token_ids[:2] == [2, 3]  # root=last token, then predicted "3"
 
 
+def test_cacheback_drafts_a_cached_follower_after_accepted_tokens():
+    """Cacheback stores local leader/follower pairs from emitted output, then
+    retrieves that follower when the leader recurs."""
+    from dejavuu.drafters import Cacheback
+
+    cacheback = Cacheback(leader_len=2, follower_len=2)
+    cacheback.reset([])
+    cacheback.update([1, 2, 3, 4])
+
+    tree = cacheback.propose([9, 1, 2], past_len=3, budget=4)
+    assert tree.token_ids == [2, 3, 4]
+
+
+def test_cacheback_tree_branches_over_recent_cached_followers():
+    from dejavuu.drafters import Cacheback
+
+    cacheback = Cacheback(leader_len=2, follower_len=2, follower_capacity=2)
+    cacheback.update([1, 2, 3, 4, 1, 2, 5, 6])
+
+    tree = cacheback.propose_tree([9, 1, 2], past_len=3, budget=4, width=2)
+    assert sorted(tree.token_ids[node] for node in tree.children(0)) == [3, 5]
+
+
+def test_cacheback_evicts_the_least_recently_used_leader():
+    from dejavuu.drafters import Cacheback
+
+    cacheback = Cacheback(leader_len=2, follower_len=2, leader_capacity=1)
+    cacheback.update([1, 2, 3, 4])
+    cacheback.update([5, 6, 7, 8])
+
+    assert cacheback.propose([0, 1, 2], past_len=3, budget=2).token_ids == [2]
+    assert cacheback.propose([0, 5, 6], past_len=3, budget=2).token_ids == [6, 7, 8]
+
+
+def test_cacheback_is_lossless_under_chain_and_tree_verification():
+    from dejavuu.drafters import Cacheback
+
+    baseline = _generate(_Toy(), [0], 30)
+    for tree in (False, True):
+        generated = _generate(_Toy(), [0], 30, Cacheback(leader_len=2, follower_len=2), tree=tree)
+        assert generated.tokens == baseline.tokens
+        assert generated.accepted > 0
+
+
 def test_rest_ignores_live_ctx_uses_datastore():
     rest = REST(datastore=[[7, 8, 9, 10, 11]], min_match=2)
     rest.reset([7, 8, 9])

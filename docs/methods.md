@@ -103,6 +103,24 @@ continuation occurred (frequency scoring), and let the draft length track the ma
 - **Drawback:** it starts each fresh request with little to go on, and it can only retrieve
   what has actually appeared during the run.
 
+### Cacheback, bounded online n-gram cache
+Cacheback stores a bounded least-recently-used (LRU) table of fixed-length **leader**
+n-grams and their recent **follower** n-grams. Each emitted target token completes new
+leader/follower pairs; on a cache hit, chain mode follows the most-recent follower and
+tree mode recursively branches across several recent followers.
+- **Drafting benefit:** lookup and eviction are bounded hot-path operations, so the
+  drafter retains recent local patterns without growing an unbounded history index. It
+  can adapt quickly when a request's topic or format changes.
+- **Verification:** Cacheback never accepts its own tokens. The shared greedy verifier
+  checks each copied path and emits a target-model correction at the first mismatch, so
+  the text path remains lossless under greedy decoding.
+- **Deliberate difference from the paper:** this first integration begins with an empty
+  online cache. It does not load the paper's optional frozen, corpus-built cache tables;
+  that is an **offline** artifact and should be evaluated separately from hot-path gains.
+- **Drawback:** it is cold at the beginning of a process and has only local online
+  evidence. Small cache capacities can evict useful patterns; large capacities trade
+  memory for fewer evictions.
+
 ### SAM-Decoding, static plus dynamic, longest match wins
 Keep two suffix indexes at once: a static datastore (like REST) and the live generation
 (like SuffixDecoding). Each step, draft from whichever one gives the longer suffix match.
@@ -177,6 +195,7 @@ one pass with tree attention.
 | ANPD | prompt/history | longest n-gram | adaptive | no | no |
 | Lookahead | prompt/history | longest n-gram | fixed | yes (pool) | no |
 | LogitSpec | prior verifier logits + prompt/history | candidate-conditioned n-gram | fixed | yes | no |
+| Cacheback | bounded online cache | recent leader/follower n-grams | follower-capped | yes | no |
 | REST | datastore | longest suffix | match-capped | yes | yes |
 | SuffixDecoding | live + history | freq-scored suffix | adaptive (match) | yes | no |
 | SAM-Decoding | datastore + live | longer of the two | match-capped | yes | optional |

@@ -120,6 +120,7 @@ VLM. REST, SuffixDecoding, SAM, and ASAM share one reusable token-only `SuffixIn
 | `lookahead` | multi-candidate n-gram pool |
 | `logit_spec` | verifier-logit candidates extended by n-gram retrieval |
 | `token_recycling` | tree drafts from the verifier's own logits |
+| `cacheback` | bounded LRU cache of recent leader/follower n-grams |
 | `rest` | retrieval from a static datastore |
 | `suffix_decoding` | online suffix index over global and per-request history |
 | `sam_decoding` | static datastore plus live generation; drafts from the longer match |
