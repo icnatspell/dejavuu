@@ -1,23 +1,25 @@
 # Method fidelity matrix
 
-This matrix distinguishes a paper's method from the repository adaptation. It is a
-scope record, not a performance ranking: benchmark conclusions must name the measured
+This is a scope record, not a performance ranking. **Drafting** says how DejaVu
+chooses proposed tokens. **Verification** says how those tokens are checked and how
+that differs from the reference. Benchmark conclusions must name the measured
 implementation and optimization level.
 
-| Method | Reference | Repository adaptation and deliberate differences | Verification status |
+| Method | Reference | Drafting in DejaVu | Verification in DejaVu and deliberate differences |
 |---|---|---|---|
-| PLD | [original code](https://github.com/apoorvumang/prompt-lookup-decoding) | Bounded longest prompt/history n-gram search; adds a `DraftTree` tree path that branches matching first tokens. | Ordinary greedy lossless. |
-| ANPD | [paper](https://arxiv.org/abs/2404.08698) | Prompt/history lookup with acceptance-driven draft-length adaptation; does not reproduce a paper-specific serving stack. | Ordinary greedy lossless. |
-| Lookahead | [paper/code](https://github.com/hao-ai-lab/LookaheadDecoding) | Token-only multi-continuation pool, not Jacobi parallel decoding; uses this engine's tree verifier. | Ordinary greedy lossless. |
-| Token Recycling | [paper/code](https://github.com/Luowaterbi/TokenRecycling) | Recycles verifier logits into sparse token-successor maps and uses Sequoia-style probability tree growth; this is an added topology optimization. | Ordinary greedy and seeded-sampling lossless. |
-| REST | [paper/code](https://github.com/FasterDecoding/REST) | Fixed-order hash suffix index over supplied token documents, rather than the paper's full retrieval stack; completed generations are folded into the store between requests. | Ordinary greedy lossless. |
-| SuffixDecoding | [paper](https://arxiv.org/abs/2411.04975) | Fixed-order hash index, not a production suffix tree; adds frequency scoring and tree continuations under the shared contract. | Ordinary greedy lossless. |
-| SAM-Decoding | [paper/code](https://github.com/hemingkx/SAM-Decoding) | Two fixed-order suffix indexes, not a literal suffix automaton; chooses static or live source by matched length. | Ordinary greedy lossless. |
-| ASAM / ASD | repository adaptation of SAM/Suffix | Acceptance- and verify-cost-aware draft caps are repository policies, not claimed paper reproductions. ASD disables the static store deliberately. | Ordinary greedy lossless. |
-| PLD+ | repository method | Adds hidden-state cosine reranking; requires a hidden-emitting decoder and falls back to PLD otherwise. | Hidden states only choose drafts; verifier remains lossless. |
-| AdaPLD | [paper](https://arxiv.org/abs/2606.05742) | Implements lexical reranking, brute-force semantic fallback, and Token-Recycling-style branches. ANN retrieval and any paper-specific tuned representation choices are not reproduced. | Ordinary greedy lossless; decoder numerical behavior may be near-lossless on quantized SmolVLM. |
-| LogitSpec | [paper/code](https://github.com/smart-lty/LogitSpec) | Uses cached verifier-logit candidates plus n-gram continuations under the anchor-root engine. It does **not** implement the paper's full prefill/current-logit seeded-root protocol; the separate prototype measured slower and remains experimental. | Ordinary greedy lossless. |
-| N-Gram Trie | [paper/code](https://github.com/mrlife219/Ngram-Trie) | Documented on its stacked PR: prompt-only continuation trie with deep tree branches. It omits the paper's retrieval/serving stack and is benchmarked separately. | Ordinary greedy lossless. |
+| PLD | [original code](https://github.com/apoorvumang/prompt-lookup-decoding) | Bounded longest prompt/history n-gram lookup. Matching first tokens can be represented as `DraftTree` branches. | The shared greedy verifier scores each proposed path and accepts only its matching prefix, so output is lossless. The paper does not define this repository's tree protocol. |
+| ANPD | [paper](https://arxiv.org/abs/2404.08698) | Prompt/history lookup with acceptance-driven draft-length adaptation. It does not reproduce the paper-specific serving stack. | Shared greedy verification; it is lossless. Adaptation changes the next proposal's cap, never the acceptance rule. |
+| Lookahead | [paper/code](https://github.com/hao-ai-lab/LookaheadDecoding) | A token-only pool of multiple continuations. This is not the paper's Jacobi parallel decoding. | The shared tree verifier checks the candidate branches rather than Lookahead's original execution design; greedy output is lossless. |
+| Token Recycling | [paper/code](https://github.com/Luowaterbi/TokenRecycling) | Recycles verifier logits into sparse successor maps, then grows a probability-ranked tree. The tree topology is a repository optimization. | The verifier validates the selected tree path with ordinary greedy or seeded-sampling coupling; both are lossless. Recycled logits rank drafts only. |
+| REST | [paper/code](https://github.com/FasterDecoding/REST) | Fixed-order hash suffix index over supplied token documents. Finished generations are added to the store between requests. This omits the paper's full retrieval stack. | Shared greedy verification makes retrieved continuations speculative and lossless. Store updates never bypass verification. |
+| SuffixDecoding | [paper](https://arxiv.org/abs/2411.04975) | Fixed-order hash index rather than a production suffix tree, with frequency scoring and tree continuations. | Shared greedy tree verification is lossless. The index and ranking are implementation substitutions, not a change to acceptance. |
+| SAM-Decoding | [paper/code](https://github.com/hemingkx/SAM-Decoding) | Two fixed-order suffix indexes, not a literal suffix automaton; selects static or live history by match length. | Shared greedy verification is lossless. The source-selection heuristic is a repository adaptation. |
+| ASAM / ASD | repository adaptation of SAM/Suffix | Acceptance- and verify-cost-aware draft caps. ASD deliberately disables the static store. These are repository policies, not paper reproductions. | Shared greedy verification remains lossless; acceptance statistics only tune later draft lengths. |
+| PLD+ | repository method | PLD candidates are reranked by hidden-state cosine similarity when the decoder exposes hidden states; otherwise it falls back to PLD. | Hidden states choose a draft only. The normal verifier still determines accepted tokens, preserving losslessness. |
+| AdaPLD | [paper](https://arxiv.org/abs/2606.05742) | Lexical reranking, brute-force semantic fallback, and Token-Recycling-style branches. ANN retrieval and paper-specific tuned representations are not reproduced. | Shared greedy verification is lossless. On quantized SmolVLM, decoder numerical variation can make the observed result near-lossless rather than bit-exact. |
+| LogitSpec | [paper/code](https://github.com/smart-lty/LogitSpec) | Cached verifier-logit candidates plus n-gram continuations under the anchor-root drafter interface. | Shared greedy verification is lossless. It does **not** carry prefill/current logits into the next verification root as in the full paper protocol; the separate seeded-root prototype was slower and remains experimental. |
+| CopySpec | [paper](https://arxiv.org/abs/2406.02332) | Finds the earliest prior occurrence of the current `gamma`-gram in the growing token history and copies its following tokens. The optional model-drafter fallback is omitted to keep the drafter token-only. | Shared greedy verification validates every copied token, so output is lossless. The omitted fallback affects proposal coverage, not correctness. |
+| N-Gram Trie | [paper/code](https://github.com/mrlife219/Ngram-Trie) | Prompt-only continuation trie with deep tree branches, documented on its draft PR. It omits the paper's retrieval/serving stack. | Shared greedy tree verification is lossless; trie branches remain only candidate paths until that gate accepts them. |
 
 ## Backend qualification
 
