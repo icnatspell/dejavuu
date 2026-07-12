@@ -108,6 +108,9 @@ class Drafter(ABC):
         """Per-step verify time and # draft tokens submitted. Lets a cost-aware drafter
         learn verify_s ~= c0 + c1*submitted and size drafts to the load. No-op default."""
 
+    def set_sampling(self, sampler, position: int) -> None:  # noqa: B027
+        """Expose sampling state for stochastic draft ranking; never acceptance."""
+
     def reset(self, prompt_ids: list[int]) -> None:  # noqa: B027
         """A new request is starting (called once per `generate`). Stateful
         drafters rotate per-request state / roll history into their store here."""

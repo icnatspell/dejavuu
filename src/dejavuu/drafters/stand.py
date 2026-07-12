@@ -22,6 +22,8 @@ class STAND(Drafter):
         self.order, self.k, self.max_draft = order, k, max_draft
         self.cap = max_draft
         self._proposed = 0
+        self._sampler = None
+        self._position = 0
         self.successors: dict[tuple[int, ...], list[tuple[int, float]]] = {}
 
     def observe(self, input_tokens: list[int], logits) -> None:
@@ -40,6 +42,12 @@ class STAND(Drafter):
     def _candidates(self, path: list[int]) -> list[tuple[int, float]]:
         for n in range(min(self.order, len(path)), 0, -1):
             if candidates := self.successors.get(tuple(path[-n:])):
+                if self._sampler is not None:
+                    logits = np.log(np.asarray([p for _, p in candidates]))
+                    order = self._sampler.gumbel_topk(
+                        logits, self._position + len(path), len(candidates)
+                    )
+                    return [candidates[i] for i in order]
                 return candidates
         return []
 
@@ -61,6 +69,9 @@ class STAND(Drafter):
             self.cap = min(self.max_draft, self.cap + 1)
         else:
             self.cap = max(1, (self.cap + landed + 1) // 2)
+
+    def set_sampling(self, sampler, position: int) -> None:
+        self._sampler, self._position = sampler, position
 
     def propose_tree(self, ctx: list[int], past_len: int, budget: int, width: int) -> DraftTree:
         if len(ctx) < self.order:

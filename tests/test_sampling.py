@@ -13,7 +13,7 @@ import numpy as np
 from dejavuu.core import generate
 from dejavuu.core.sampling import Sampler
 from dejavuu.core.verifier import KVCache, Verifier
-from dejavuu.drafters import PLD, TokenRecycling
+from dejavuu.drafters import PLD, STAND, TokenRecycling
 
 V = 16
 LOGITS = np.random.default_rng(1).standard_normal((V, V))  # next-token logits by token
@@ -38,7 +38,7 @@ def test_sampling_spec_matches_baseline_token_for_token():
         for temp, top_p in [(1.0, 1.0), (0.7, 1.0), (1.3, 0.9)]:
             s = Sampler(temp, top_p, seed)
             base = generate(model, prompt, 40, sampler=s)
-            for drafter in (PLD(), TokenRecycling()):
+            for drafter in (PLD(), TokenRecycling(), STAND(order=2)):
                 spec = generate(model, prompt, 40, drafter=drafter, budget=6, sampler=s)
                 assert spec.tokens == base.tokens, (seed, temp, top_p, type(drafter))
 
@@ -55,6 +55,13 @@ def test_sampler_tracks_target_distribution():
 def test_temperature_zero_is_greedy():
     s = Sampler(temperature=0.0)
     assert s.token(LOGITS[5], position=99) == int(LOGITS[5].argmax())
+
+
+def test_sampler_gumbel_topk_is_seeded_and_unique():
+    s = Sampler(temperature=1.0, seed=7)
+    a = s.gumbel_topk(np.log(np.array([0.5, 0.3, 0.2])), position=11, k=3)
+    assert a == s.gumbel_topk(np.log(np.array([0.5, 0.3, 0.2])), position=11, k=3)
+    assert len(a) == len(set(a)) == 3
 
 
 if __name__ == "__main__":

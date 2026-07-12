@@ -19,7 +19,7 @@ from pathlib import Path
 from loguru import logger
 from tqdm import tqdm
 
-from dejavuu.core import generate
+from dejavuu.core import Sampler, generate
 from dejavuu.decoders.text import Model, download
 from dejavuu.drafters import Cacheback
 from dejavuu.eval.harness import (
@@ -100,6 +100,9 @@ def main() -> None:
         help="K per topic (overrides --n/--workload)",
     )
     p.add_argument("--max-new", type=int, default=128)
+    p.add_argument("--temperature", type=float, default=0.0)
+    p.add_argument("--top-p", type=float, default=1.0)
+    p.add_argument("--seed", type=int, default=0)
     p.add_argument("--budget", type=int, default=8)
     p.add_argument(
         "--tree",
@@ -130,6 +133,7 @@ def main() -> None:
         "--threads", type=int, default=0, help="ORT intra-op threads per session (0 = ORT default)"
     )
     args = p.parse_args()
+    sampler = Sampler(args.temperature, args.top_p, args.seed) if args.temperature > 0 else None
 
     if args.log:
         args.log.parent.mkdir(parents=True, exist_ok=True)
@@ -191,6 +195,7 @@ def main() -> None:
                 tok.eos_token_id,
                 tree=args.tree,
                 width=args.width,
+                sampler=sampler,
             )
             dt = time.time() - t
             cat_aggs[m].add(r, dt)

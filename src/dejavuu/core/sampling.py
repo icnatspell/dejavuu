@@ -55,6 +55,22 @@ class Sampler:
         u = np.random.default_rng((self.seed, position)).random()
         return int(min(np.searchsorted(np.cumsum(p), u, side="right"), len(p) - 1))
 
+    def gumbel_topk(self, logits: np.ndarray, position: int, k: int) -> list[int]:
+        """Position-seeded Gumbel-Top-K without replacement for draft branches.
+
+        This ranks candidate tokens only; the verifier's `token` draw still decides
+        which token is emitted, preserving the target sampling distribution.
+        """
+        if k < 1:
+            return []
+        scaled = logits / max(self.temperature, 1e-8)
+        rng = np.random.default_rng((self.seed, position, 1))
+        u = np.clip(rng.random(len(scaled)), 1e-12, 1 - 1e-12)
+        score = scaled - np.log(-np.log(u))
+        k = min(k, len(score))
+        part = np.argpartition(-score, k - 1)[:k]
+        return [int(t) for t in part[np.argsort(-score[part])]]
+
 
 def pick(logits: np.ndarray, position: int, sampler: Sampler | None) -> int:
     """The one model decision in the accept loop: greedy argmax, or a seeded draw."""

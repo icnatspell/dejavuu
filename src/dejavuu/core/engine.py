@@ -94,6 +94,7 @@ def generate(
         if drafter is None:
             dtree = DraftTree.chain([seq[-1]])
         else:
+            drafter.set_sampling(sampler, committed)
             t0 = time.perf_counter()
             dtree = (
                 drafter.propose_tree(seq, committed, budget, width)
