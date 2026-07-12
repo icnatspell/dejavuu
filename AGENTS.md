@@ -71,3 +71,11 @@ run chain/tree conformance and sampled-distribution checks where applicable; ben
 against relevant existing methods; then report measured benefit, optimization level,
 known paper deviations, and concrete remaining levers. Do not stop for routine
 approval between these steps.
+
+Every benchmark report must include, where applicable: TTFT/prefill time, decode
+throughput (`tok/s`), drafter hot-path time, verifier time, mean accepted draft length,
+acceptance rate, submitted/verified draft-token counts, and time per emitted token.
+For proposal-quality analysis, also report top-1 and top-5 target-agreement at the
+draft root (or state clearly when a backend/method cannot expose a comparable value).
+Add useful method-specific metrics, but never mix one-time setup or offline work into
+decode throughput. Report cold and warm cache/memory modes separately.

@@ -6,7 +6,8 @@ seeded sampler remains the acceptance authority, preserving the target distribut
 
 from __future__ import annotations
 
-from collections import deque
+import heapq
+import itertools
 
 import numpy as np
 
@@ -24,6 +25,7 @@ class STAND(Drafter):
         self._proposed = 0
         self._sampler = None
         self._position = 0
+        self._tree_sampling = False
         self.successors: dict[tuple[int, ...], list[tuple[int, float]]] = {}
 
     def observe(self, input_tokens: list[int], logits) -> None:
@@ -42,7 +44,7 @@ class STAND(Drafter):
     def _candidates(self, path: list[int]) -> list[tuple[int, float]]:
         for n in range(min(self.order, len(path)), 0, -1):
             if candidates := self.successors.get(tuple(path[-n:])):
-                if self._sampler is not None:
+                if self._sampler is not None and self._tree_sampling:
                     logits = np.log(np.asarray([p for _, p in candidates]))
                     order = self._sampler.gumbel_topk(
                         logits, self._position + len(path), len(candidates)
@@ -70,20 +72,22 @@ class STAND(Drafter):
         else:
             self.cap = max(1, (self.cap + landed + 1) // 2)
 
-    def set_sampling(self, sampler, position: int) -> None:
-        self._sampler, self._position = sampler, position
+    def set_sampling(self, sampler, position: int, tree: bool = False) -> None:
+        self._sampler, self._position, self._tree_sampling = sampler, position, tree
 
     def propose_tree(self, ctx: list[int], past_len: int, budget: int, width: int) -> DraftTree:
         if len(ctx) < self.order:
             return DraftTree.chain([ctx[-1]])
         tokens, parent = [ctx[-1]], [-1]
-        frontier = deque([(0, list(ctx))])
+        frontier: list[tuple[float, int, int, int, list[int]]] = []
+        tie = itertools.count()
+        for tok, prob in self._candidates(ctx)[:width]:
+            heapq.heappush(frontier, (-prob, next(tie), 0, tok, [*ctx, tok]))
         while frontier and len(tokens) - 1 < budget:
-            node, path = frontier.popleft()
-            for tok, _ in self._candidates(path)[:width]:
-                if len(tokens) - 1 >= budget:
-                    return DraftTree(tokens, parent)
-                tokens.append(tok)
-                parent.append(node)
-                frontier.append((len(tokens) - 1, [*path, tok]))
+            neg_prob, _, node, tok, path = heapq.heappop(frontier)
+            tokens.append(tok)
+            parent.append(node)
+            child = len(tokens) - 1
+            for nxt, prob in self._candidates(path)[:width]:
+                heapq.heappush(frontier, (neg_prob * prob, next(tie), child, nxt, [*path, nxt]))
         return DraftTree(tokens, parent)

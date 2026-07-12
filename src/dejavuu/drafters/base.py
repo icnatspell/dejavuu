@@ -108,7 +108,7 @@ class Drafter(ABC):
         """Per-step verify time and # draft tokens submitted. Lets a cost-aware drafter
         learn verify_s ~= c0 + c1*submitted and size drafts to the load. No-op default."""
 
-    def set_sampling(self, sampler, position: int) -> None:  # noqa: B027
+    def set_sampling(self, sampler, position: int, tree: bool = False) -> None:  # noqa: B027
         """Expose sampling state for stochastic draft ranking; never acceptance."""
 
     def reset(self, prompt_ids: list[int]) -> None:  # noqa: B027
