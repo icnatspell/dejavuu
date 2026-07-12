@@ -62,3 +62,12 @@ highest-value behavior, watch it fail, implement the minimum to pass, repeat one
 behavior at a time. Tests assert observable behavior, not private internals. For
 performance-sensitive code, test correctness and protocol invariants separately
 from machine-specific timing thresholds.
+
+## Method integration loop
+
+For every new decoding method, work autonomously through this loop: check or create
+the tracking issue; write a public-interface test; implement in small vertical slices;
+run chain/tree conformance and sampled-distribution checks where applicable; benchmark
+against relevant existing methods; then report measured benefit, optimization level,
+known paper deviations, and concrete remaining levers. Do not stop for routine
+approval between these steps.

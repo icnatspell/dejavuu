@@ -22,6 +22,7 @@ from dejavuu.drafters.pld_plus import PLDPlus
 from dejavuu.drafters.prompt_lookup import PLD
 from dejavuu.drafters.rest import REST
 from dejavuu.drafters.sam_decoding import SAMDecoding
+from dejavuu.drafters.stand import STAND
 from dejavuu.drafters.suffix_decoding import SuffixDecoding
 from dejavuu.drafters.suffix_index import SuffixIndex
 from dejavuu.drafters.token_recycling import TokenRecycling
@@ -57,6 +58,7 @@ DRAFTERS: dict[str, DrafterSpec] = {
     "sam_decoding": DrafterSpec(
         SAMDecoding, needs_datastore=True, doc="datastore + live generation, longer match wins"
     ),
+    "stand": DrafterSpec(STAND, doc="logit n-gram candidates for sampled tree drafting"),
     "asam": DrafterSpec(ASAM, needs_datastore=True, doc="adaptive SAM: acceptance-calibrated cap"),
     "asam_verify": DrafterSpec(
         ASAM, kwargs={"verify_aware": True}, needs_datastore=True, doc="ASAM + verify-cost-aware"
@@ -100,6 +102,7 @@ __all__ = [
     "METHODS",
     "PLD",
     "REST",
+    "STAND",
     "AdaPLD",
     "Cacheback",
     "DraftTree",
