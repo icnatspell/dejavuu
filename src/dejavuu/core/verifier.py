@@ -80,6 +80,19 @@ class Verifier(ABC):
         _, past, _ = self.forward(prompt_ids[:-1], self.empty_kv(), 0)
         return past, len(prompt_ids) - 1
 
+    def prefill_seeded(self, prompt_ids: list[int]) -> tuple[KVCache, int, np.ndarray]:
+        """Prefill the complete prompt for seeded-root decoding.
+
+        Unlike :meth:`prefill`, this commits the final prompt token and returns its
+        logits.  Greedy selection from those logits is already the target's next
+        token, so a seeded verifier can use it as the next uncommitted tree root.
+        The ordinary anchor-root loop intentionally keeps its existing convention.
+        """
+        if not prompt_ids:
+            raise ValueError("seeded prefill needs a non-empty prompt")
+        logits, past, _ = self.forward(prompt_ids, self.empty_kv(), 0)
+        return past, len(prompt_ids), logits[-1]
+
     @property
     def is_vlm(self) -> bool:
         """True for a multimodal backend that consumes images via `prepare`. Text
