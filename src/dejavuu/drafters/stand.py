@@ -27,14 +27,21 @@ class STAND(Drafter):
     def observe(self, input_tokens: list[int], logits) -> None:
         logits = np.asarray(logits)
         k = min(self.k, logits.shape[-1])
-        for row in range(self.order - 1, len(input_tokens)):
+        for row in range(len(input_tokens)):
             values = logits[row]
             part = np.argpartition(-values, k - 1)[:k]
             top = part[np.argsort(-values[part])]
             shifted = values - values.max()
             probs = np.exp(shifted) / np.exp(shifted).sum()
-            key = tuple(input_tokens[row - self.order + 1 : row + 1])
-            self.successors[key] = [(int(tok), float(probs[tok])) for tok in top]
+            candidates = [(int(tok), float(probs[tok])) for tok in top]
+            for n in range(1, min(self.order, row + 1) + 1):
+                self.successors[tuple(input_tokens[row - n + 1 : row + 1])] = candidates
+
+    def _candidates(self, path: list[int]) -> list[tuple[int, float]]:
+        for n in range(min(self.order, len(path)), 0, -1):
+            if candidates := self.successors.get(tuple(path[-n:])):
+                return candidates
+        return []
 
     def propose(self, ctx: list[int], past_len: int, budget: int) -> DraftTree:
         tree = self.propose_tree(ctx, past_len, min(budget, self.cap), width=1)
@@ -62,7 +69,7 @@ class STAND(Drafter):
         frontier = deque([(0, list(ctx))])
         while frontier and len(tokens) - 1 < budget:
             node, path = frontier.popleft()
-            for tok, _ in self.successors.get(tuple(path[-self.order :]), [])[:width]:
+            for tok, _ in self._candidates(path)[:width]:
                 if len(tokens) - 1 >= budget:
                     return DraftTree(tokens, parent)
                 tokens.append(tok)

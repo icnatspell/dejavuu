@@ -161,6 +161,17 @@ def test_stand_adapts_its_chain_cap_from_accepted_drafts():
     assert stand.cap < 3
 
 
+def test_stand_backs_off_to_a_shorter_observed_suffix():
+    from dejavuu.drafters import STAND
+
+    stand = STAND(order=4, k=1)
+    logits = np.full((4, 8), -9.0, np.float32)
+    logits[3, 6] = 9.0
+    stand.observe([1, 2, 3, 4], logits)  # suffix (4,) predicts 6
+
+    assert stand.propose([9, 8, 7, 4], past_len=4, budget=1).token_ids == [4, 6]
+
+
 def test_rest_ignores_live_ctx_uses_datastore():
     rest = REST(datastore=[[7, 8, 9, 10, 11]], min_match=2)
     rest.reset([7, 8, 9])
