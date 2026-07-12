@@ -21,7 +21,14 @@ from tqdm import tqdm
 
 from dejavuu.core import generate
 from dejavuu.decoders.text import Model, download
-from dejavuu.eval.harness import Agg, load_datastore, make_drafter, render_table
+from dejavuu.eval.harness import (
+    Agg,
+    benchmark_metadata,
+    load_datastore,
+    make_drafter,
+    render_table,
+    write_run_manifest,
+)
 
 SPEC_BENCH_URL = (
     "https://raw.githubusercontent.com/hemingkx/Spec-Bench/main/data/spec_bench/question.jsonl"
@@ -182,6 +189,20 @@ def main() -> None:
         args.log,
         csv_path=args.csv,
     )
+    if args.csv:
+        write_run_manifest(
+            args.csv,
+            benchmark_metadata(
+                dataset="specbench",
+                model=f"{model.root}:{args.variant}",
+                provider=args.provider,
+                threads=args.threads,
+                budget=args.budget,
+                tree=args.tree,
+                width=args.width,
+                max_new=args.max_new,
+            ),
+        )
 
 
 if __name__ == "__main__":

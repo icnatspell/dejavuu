@@ -6,6 +6,8 @@ from __future__ import annotations
 
 import csv
 import json
+import os
+import platform
 from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -25,11 +27,38 @@ from dejavuu.drafters import DRAFTERS, make_drafter
 __all__ = [
     "DRAFTERS",
     "Agg",
+    "benchmark_metadata",
     "load_datastore",
     "make_drafter",
     "render_table",
     "write_run_manifest",
 ]
+
+
+def benchmark_metadata(
+    *,
+    dataset: str,
+    model: str,
+    provider: str,
+    threads: int,
+    budget: int,
+    tree: bool,
+    width: int,
+    max_new: int,
+) -> dict[str, object]:
+    """Describe the hardware and decode settings required to compare runs fairly."""
+    return {
+        "schema_version": 1,
+        "benchmark": dataset,
+        "model": model,
+        "runtime": {"provider": provider, "threads": threads},
+        "decode": {"budget": budget, "max_new": max_new, "tree": tree, "width": width},
+        "host": {
+            "cpu_count": os.cpu_count(),
+            "machine": platform.machine(),
+            "processor": platform.processor(),
+        },
+    }
 
 
 def write_run_manifest(csv_path: Path, metadata: dict[str, object]) -> Path:
