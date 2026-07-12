@@ -24,7 +24,14 @@ from tqdm import tqdm
 
 from dejavuu.core import generate
 from dejavuu.decoders.vlm import GENAI_DECODER, VLM, VLM_TREE_DECODER, download
-from dejavuu.eval.harness import Agg, load_datastore, make_drafter, render_table
+from dejavuu.eval.harness import (
+    Agg,
+    benchmark_metadata,
+    load_datastore,
+    make_drafter,
+    render_table,
+    write_run_manifest,
+)
 from dejavuu.eval.specbench import load_specbench
 
 RAW = "https://raw.githubusercontent.com/killthefullmoon/MMSpec/main/dataset/MMSpec/testmini"
@@ -227,6 +234,20 @@ def main() -> None:
         strict=False,
         csv_path=args.csv,
     )
+    if args.csv:
+        write_run_manifest(
+            args.csv,
+            benchmark_metadata(
+                dataset=args.dataset,
+                model=f"{root}:{args.variant}:{vlm.decoder_path}",
+                provider=args.provider,
+                threads=args.threads,
+                budget=args.budget,
+                tree=args.tree,
+                width=args.width,
+                max_new=args.max_new,
+            ),
+        )
 
 
 if __name__ == "__main__":
