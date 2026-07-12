@@ -233,3 +233,17 @@ def test_ngram_trie_allocates_small_tree_budget_across_first_level_branches():
     d.reset(prompt)
     tree = d.propose_tree(prompt, 0, budget=3, width=2)
     assert {tree.token_ids[i] for i in tree.children(0)} == {7, 9}
+
+
+def test_ngram_trie_spends_small_budget_deepening_a_dominant_continuation():
+    """When one next token dominates the observed continuations, deeper nodes are
+    more valuable than spending the budget on a low-frequency sibling."""
+    from dejavuu.drafters import NGramTrie
+
+    d = NGramTrie(prefix=2, continuation=4)
+    prompt = [1, 2, 9, 10, 11, 1, 2, 9, 10, 11, 1, 2, 9, 10, 11, 1, 2, 7, 8, 6, 1, 2]
+    d.reset(prompt)
+    tree = d.propose_tree(prompt, 0, budget=3, width=2)
+    children = tree.children(0)
+    assert [tree.token_ids[i] for i in children] == [9]
+    assert tree.token_ids[tree.children(children[0])[0]] == 10

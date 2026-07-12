@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
+from math import log2
 
 from dejavuu.drafters.base import Drafter, DraftTree
 
@@ -32,6 +33,11 @@ class NGramTrie(Drafter):
     prompt-derived continuation stored below each matched prefix; the runtime budget
     remains the final authority on submitted tree nodes.
     """
+
+    # Below this first-token entropy (bits), spend the tree budget on the dominant
+    # path; above it, first cover competing roots.  0.85 separates a 3:1 split
+    # (0.81 bits) from an even two-way fork (1 bit).
+    BRANCH_ENTROPY = 0.85
 
     def __init__(self, prefix: int = 3, continuation: int = 10, min_prefix: int = 1):
         self.prefix = prefix
@@ -61,6 +67,18 @@ class NGramTrie(Drafter):
     def _ranked(node: _Node, width: int) -> list[tuple[int, _Node]]:
         return sorted(node.children.items(), key=lambda item: item[1].count, reverse=True)[:width]
 
+    @staticmethod
+    def _entropy(node: _Node) -> float:
+        total = sum(child.count for child in node.children.values())
+        return (
+            -sum(
+                (child.count / total) * log2(child.count / total)
+                for child in node.children.values()
+            )
+            if total
+            else 0.0
+        )
+
     def propose(self, ctx: list[int], past_len: int, budget: int) -> DraftTree:
         root = self._root(ctx)
         chain = [ctx[-1]]
@@ -76,17 +94,29 @@ class NGramTrie(Drafter):
             return DraftTree.chain([ctx[-1]])
         tokens, parent = [ctx[-1]], [-1]
 
-        # Breadth-first expansion covers competing next-token hypotheses before
-        # spending the finite node budget on a single deep continuation.
-        pending = deque([(root, 0)])
-        while pending and len(tokens) - 1 < budget:
-            node, parent_idx = pending.popleft()
-            for token, child in self._ranked(node, width):
-                if len(tokens) - 1 >= budget:
-                    break
-                idx = len(tokens)
-                tokens.append(token)
-                parent.append(parent_idx)
-                pending.append((child, idx))
+        if self._entropy(root) <= self.BRANCH_ENTROPY:
+            # A concentrated continuation distribution: invest in its likely depth.
+            def visit(node: _Node, parent_idx: int) -> None:
+                for token, child in self._ranked(node, width):
+                    if len(tokens) - 1 >= budget:
+                        return
+                    idx = len(tokens)
+                    tokens.append(token)
+                    parent.append(parent_idx)
+                    visit(child, idx)
+
+            visit(root, 0)
+        else:
+            # Ambiguous roots: cover siblings before spending nodes on depth.
+            pending = deque([(root, 0)])
+            while pending and len(tokens) - 1 < budget:
+                node, parent_idx = pending.popleft()
+                for token, child in self._ranked(node, width):
+                    if len(tokens) - 1 >= budget:
+                        break
+                    idx = len(tokens)
+                    tokens.append(token)
+                    parent.append(parent_idx)
+                    pending.append((child, idx))
 
         return DraftTree(tokens, parent)
