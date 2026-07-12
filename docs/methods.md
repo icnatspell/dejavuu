@@ -78,9 +78,10 @@ cached verifier logit, so it deliberately makes no guess.
 - **Benefit:** a likely next token creates a more specific lookup key, so retrieval can
   continue even when the current suffix alone has no exact hit. It adds no model forward
   or datastore setup cost.
-- **Drawback:** the cached candidates are keyed by token id, not a full hidden state, so
-  a repeated token can reuse a distribution observed in a different context. The verifier
-  keeps this lossless, but acceptance still has to justify the extra tree width.
+- **Drawback:** cached candidates are keyed by a bounded recent token path, rather than a
+  full hidden state. A cold path falls back to a token-level cache, which can still be
+  stale for a repeated token. The verifier keeps this lossless, but acceptance still has
+  to justify the extra tree width.
 
 ### REST, retrieval over a static datastore
 Match the current suffix against a persistent datastore (a domain corpus supplied up

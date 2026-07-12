@@ -184,3 +184,25 @@ def test_logit_spec_uses_the_top_logit_to_retrieve_a_next_next_token_draft():
     children = {tree.token_ids[c]: c for c in tree.children(0)}
     assert set(children) == {2, 7}
     assert tree.token_ids[tree.children(children[2])[0]] == 9
+
+
+def test_logit_spec_prefers_logits_cached_for_the_matching_context():
+    """The same anchor token can have different likely successors in two contexts.
+    A path-specific cache must recover the successor for the matching context rather
+    than the most recently observed occurrence of that token."""
+    from dejavuu.drafters import LogitSpec
+
+    d = LogitSpec(k=1, order=2)
+    first = [1, 5]
+    d.propose(first, 0, budget=2)
+    logits = np.full((1, 12), -9.0, np.float32)
+    logits[0, 2] = 9.0
+    d.observe([5], logits)
+
+    second = [9, 5]
+    d.propose(second, 0, budget=2)
+    logits.fill(-9.0)
+    logits[0, 7] = 9.0
+    d.observe([5], logits)
+
+    assert d.propose(first, 0, budget=2).token_ids[:2] == [5, 2]
