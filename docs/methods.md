@@ -69,6 +69,19 @@ In chain mode (no tree) it falls back to PLD.
 - **Drawback:** it only pays off with tree verification, and the extra branches cost verify
   width. If the n-gram only ever had one continuation, it adds nothing.
 
+### LogitSpec, logit-conditioned n-gram retrieval
+Reuse top candidates from verifier logits already computed on earlier steps. The
+highest-ranked candidate starts the chain; its candidate-specific n-gram suffix then
+retrieves a continuation. Under tree verification, several top-logit candidates are
+siblings, each with its own retrieved continuation. The first decode step has no
+cached verifier logit, so it deliberately makes no guess.
+- **Benefit:** a likely next token creates a more specific lookup key, so retrieval can
+  continue even when the current suffix alone has no exact hit. It adds no model forward
+  or datastore setup cost.
+- **Drawback:** the cached candidates are keyed by token id, not a full hidden state, so
+  a repeated token can reuse a distribution observed in a different context. The verifier
+  keeps this lossless, but acceptance still has to justify the extra tree width.
+
 ### REST, retrieval over a static datastore
 Match the current suffix against a persistent datastore (a domain corpus supplied up
 front, and/or completed generations added as the run proceeds) and return the
@@ -162,6 +175,7 @@ one pass with tree attention.
 | AdaPLD | prompt/history + semantic | n-gram or hidden similarity | fixed | yes (branches) | no (needs hidden states) |
 | ANPD | prompt/history | longest n-gram | adaptive | no | no |
 | Lookahead | prompt/history | longest n-gram | fixed | yes (pool) | no |
+| LogitSpec | prior verifier logits + prompt/history | candidate-conditioned n-gram | fixed | yes | no |
 | REST | datastore | longest suffix | match-capped | yes | yes |
 | SuffixDecoding | live + history | freq-scored suffix | adaptive (match) | yes | no |
 | SAM-Decoding | datastore + live | longer of the two | match-capped | yes | optional |

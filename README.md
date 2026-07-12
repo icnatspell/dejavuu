@@ -118,6 +118,7 @@ VLM. REST, SuffixDecoding, SAM, and ASAM share one reusable token-only `SuffixIn
 | `adapld` | `pld_plus` with a semantic fallback, plus a branched tree under `--tree` |
 | `anpd` | adaptive n-gram draft length |
 | `lookahead` | multi-candidate n-gram pool |
+| `logit_spec` | verifier-logit candidates extended by n-gram retrieval |
 | `token_recycling` | tree drafts from the verifier's own logits |
 | `rest` | retrieval from a static datastore |
 | `suffix_decoding` | online suffix index over global and per-request history |
@@ -125,9 +126,8 @@ VLM. REST, SuffixDecoding, SAM, and ASAM share one reusable token-only `SuffixIn
 | `asam` / `asam_verify` | adaptive SAM with an acceptance-calibrated cap, plus verify-cost-aware sizing |
 | `asd` / `asd_verify` | `asam` without a datastore, so an adaptive suffix decoder |
 
-The retrieval drafters are lossless under greedy decoding: they only copy tokens the
-model has seen, and draft sizing shortens a draft without changing which tokens it
-proposes. Every method emits a chain by default and a branching tree under `--tree`
+The drafters are lossless under greedy decoding: they only choose tokens to propose,
+while the verifier decides what is emitted. Every method emits a chain by default and a branching tree under `--tree`
 (`pld_plus` and `anpd` fall back to a chain, since neither has a natural fork).
 
 ## How it works

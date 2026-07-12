@@ -163,3 +163,24 @@ def test_asam_tree_branches_from_longer_source():
     ctx = [1, 2, 9, 1, 2, 7, 1, 2]
     tree = asam.propose_tree(ctx, 0, budget=8, width=2)  # room for both branches
     assert sorted(tree.token_ids[c] for c in tree.children(0)) == [7, 9]
+
+
+def test_logit_spec_uses_the_top_logit_to_retrieve_a_next_next_token_draft():
+    """The current verifier logits choose first-token tree branches; each branch
+    retrieves the continuation that historically followed that candidate."""
+    from dejavuu.drafters import LogitSpec
+
+    d = LogitSpec(k=2, order=2)
+    logits = np.full((1, 12), -9.0, np.float32)
+    logits[0, 2] = 9.0
+    logits[0, 7] = 8.0
+    d.observe([5], logits)
+
+    # Earlier [2, 9, 10] and [7, 8] make both logit candidates useful branches.
+    ctx = [2, 9, 10, 7, 8, 5]
+    assert d.propose(ctx, 0, budget=3).token_ids == [5, 2, 9, 10]
+
+    tree = d.propose_tree(ctx, 0, budget=8, width=2)
+    children = {tree.token_ids[c]: c for c in tree.children(0)}
+    assert set(children) == {2, 7}
+    assert tree.token_ids[tree.children(children[2])[0]] == 9

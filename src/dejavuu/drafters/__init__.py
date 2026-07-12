@@ -15,6 +15,7 @@ from dejavuu.drafters.adapld import AdaPLD
 from dejavuu.drafters.anpd import ANPD
 from dejavuu.drafters.asam import ASAM
 from dejavuu.drafters.base import Drafter, DraftTree
+from dejavuu.drafters.logit_spec import LogitSpec
 from dejavuu.drafters.lookahead import Lookahead
 from dejavuu.drafters.pld_plus import PLDPlus
 from dejavuu.drafters.prompt_lookup import PLD
@@ -45,6 +46,9 @@ DRAFTERS: dict[str, DrafterSpec] = {
     "adapld": DrafterSpec(AdaPLD, doc="PLD+ + semantic fallback + branched tree"),
     "anpd": DrafterSpec(ANPD, doc="adaptive n-gram draft length"),
     "lookahead": DrafterSpec(Lookahead, doc="multi-candidate n-gram pool"),
+    "logit_spec": DrafterSpec(
+        LogitSpec, doc="verifier-logit candidates extended by n-gram retrieval"
+    ),
     "token_recycling": DrafterSpec(TokenRecycling, doc="tree drafts from the verifier's logits"),
     "rest": DrafterSpec(REST, needs_datastore=True, doc="retrieval from a static datastore"),
     "suffix_decoding": DrafterSpec(SuffixDecoding, doc="online suffix index over run history"),
@@ -98,6 +102,7 @@ __all__ = [
     "DraftTree",
     "Drafter",
     "DrafterSpec",
+    "LogitSpec",
     "Lookahead",
     "PLDPlus",
     "SAMDecoding",
