@@ -148,6 +148,19 @@ def test_stand_extends_a_branch_with_its_new_ngram_context():
     assert stand.propose_tree([1, 2], past_len=2, budget=2, width=1).token_ids == [2, 5, 7]
 
 
+def test_stand_adapts_its_chain_cap_from_accepted_drafts():
+    from dejavuu.drafters import STAND
+
+    stand = STAND(max_draft=6)
+    stand.cap = 2
+    stand._proposed = 2
+    stand.update([1, 2, 3])  # two guesses accepted, plus the verifier bonus
+    assert stand.cap == 3
+    stand._proposed = 5
+    stand.update([1, 2])  # one accepted guess: shrink an over-long next proposal
+    assert stand.cap < 3
+
+
 def test_rest_ignores_live_ctx_uses_datastore():
     rest = REST(datastore=[[7, 8, 9, 10, 11]], min_match=2)
     rest.reset([7, 8, 9])

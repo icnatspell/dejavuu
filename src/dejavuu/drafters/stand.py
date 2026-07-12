@@ -16,10 +16,12 @@ from dejavuu.drafters.base import Drafter, DraftTree
 class STAND(Drafter):
     """Reuse free verifier logits as probability-ranked n-gram tree candidates."""
 
-    def __init__(self, order: int = 4, k: int = 4):
-        if min(order, k) < 1:
-            raise ValueError("STAND order and k must be positive")
-        self.order, self.k = order, k
+    def __init__(self, order: int = 4, k: int = 4, max_draft: int = 8):
+        if min(order, k, max_draft) < 1:
+            raise ValueError("STAND order, k, and max_draft must be positive")
+        self.order, self.k, self.max_draft = order, k, max_draft
+        self.cap = max_draft
+        self._proposed = 0
         self.successors: dict[tuple[int, ...], list[tuple[int, float]]] = {}
 
     def observe(self, input_tokens: list[int], logits) -> None:
@@ -35,13 +37,23 @@ class STAND(Drafter):
             self.successors[key] = [(int(tok), float(probs[tok])) for tok in top]
 
     def propose(self, ctx: list[int], past_len: int, budget: int) -> DraftTree:
-        tree = self.propose_tree(ctx, past_len, budget, width=1)
+        tree = self.propose_tree(ctx, past_len, min(budget, self.cap), width=1)
         chain = [tree.token_ids[0]]
         node = 0
         while children := tree.children(node):
             node = children[0]
             chain.append(tree.token_ids[node])
+        self._proposed = len(chain) - 1
         return DraftTree.chain(chain)
+
+    def update(self, accepted: list[int]) -> None:
+        if not self._proposed:
+            return
+        landed = len(accepted) - 1
+        if landed >= self._proposed:
+            self.cap = min(self.max_draft, self.cap + 1)
+        else:
+            self.cap = max(1, (self.cap + landed + 1) // 2)
 
     def propose_tree(self, ctx: list[int], past_len: int, budget: int, width: int) -> DraftTree:
         if len(ctx) < self.order:
