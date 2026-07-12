@@ -1,6 +1,7 @@
 # dejavuu
 
-Retrieval-based speculative decoding on raw [`onnxruntime`](https://onnxruntime.ai/).
+Training-free speculative decoding for [ONNX Runtime](https://onnxruntime.ai/) and
+Hugging Face PyTorch models.
 
 [![CI](https://github.com/icnatspell/dejavuu/actions/workflows/ci.yml/badge.svg)](https://github.com/icnatspell/dejavuu/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/icnatspell/dejavuu/blob/main/LICENSE)
@@ -11,11 +12,12 @@ forward pass. The target model's accept rule keeps only the tokens it would have
 produced anyway, so a wrong guess wastes one pass and never changes the output. The
 speedup comes from replacing many single-token passes with fewer multi-token ones.
 
-`dejavuu` drops the small draft model that speculative decoding usually needs. Its
-drafters copy their guesses straight from text the model has already seen: the prompt,
-the generation so far, or a fixed corpus. A guess is an index lookup, not a second
-network. Every drafter works on raw token ids, so one instance drives both a text LLM
-and a vision-language model through the same verifier.
+`dejavuu` is model-free in the drafting sense: it drops the small auxiliary draft model
+that speculative decoding usually needs. Its drafters copy their guesses straight from
+text the target model has already seen—the prompt, the generation so far, or a fixed
+corpus. A guess is an index lookup, not a second network. Every drafter works on raw
+token ids, so one instance drives both a text LLM and a vision-language model through
+the same verifier.
 
 - No draft model to load, train, or keep in memory.
 - Strictly lossless on the text path, checked bit-for-bit in CI.
@@ -23,6 +25,21 @@ and a vision-language model through the same verifier.
 - Chain and tree verification both work for every method.
 
 [docs/methods.md](docs/methods.md) explains how the drafters differ and when each one wins.
+
+## Where dejavuu fits
+
+Dejavuu is designed for **input-grounded** generation: tasks where a useful part of the
+answer is present in, or closely constrained by, the prompt or an attached datastore.
+That includes retrieval-augmented generation (RAG), function calling and other
+structured output, summarization, code completion, and similar copy- or
+context-heavy workloads. These methods can turn repeated token patterns into drafts
+without training or loading a second model.
+
+For tasks whose answer is weakly grounded in the input—such as open-ended translation
+or generation—a learned, model-based drafter such as EAGLE-3 or DFlash may be a better
+fit. This is a workload distinction, not a universal ranking: measure acceptance,
+verify cost, and end-to-end decode throughput on the target model and prompts before
+choosing a method.
 
 ## Quickstart
 
