@@ -7,7 +7,7 @@ too, so tree verification can test several complete in-context futures in one pa
 
 from __future__ import annotations
 
-from collections import defaultdict
+from collections import defaultdict, deque
 from dataclasses import dataclass, field
 
 from dejavuu.drafters.base import Drafter, DraftTree
@@ -76,14 +76,17 @@ class NGramTrie(Drafter):
             return DraftTree.chain([ctx[-1]])
         tokens, parent = [ctx[-1]], [-1]
 
-        def visit(node: _Node, parent_idx: int) -> None:
+        # Breadth-first expansion covers competing next-token hypotheses before
+        # spending the finite node budget on a single deep continuation.
+        pending = deque([(root, 0)])
+        while pending and len(tokens) - 1 < budget:
+            node, parent_idx = pending.popleft()
             for token, child in self._ranked(node, width):
                 if len(tokens) - 1 >= budget:
-                    return
+                    break
                 idx = len(tokens)
                 tokens.append(token)
                 parent.append(parent_idx)
-                visit(child, idx)
+                pending.append((child, idx))
 
-        visit(root, 0)
         return DraftTree(tokens, parent)

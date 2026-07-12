@@ -221,3 +221,15 @@ def test_ngram_trie_preserves_branching_continuations_below_a_context_prefix():
     children = {tree.token_ids[i]: i for i in tree.children(0)}
     assert set(children) == {7, 9}
     assert tree.token_ids[tree.children(children[9])[0]] == 10
+
+
+def test_ngram_trie_allocates_small_tree_budget_across_first_level_branches():
+    """When budget is tight, cover competing next tokens before extending a single
+    continuation deeply; otherwise tree verification cannot hedge the ambiguity."""
+    from dejavuu.drafters import NGramTrie
+
+    d = NGramTrie(prefix=2, continuation=4)
+    prompt = [1, 2, 9, 10, 11, 1, 2, 7, 8, 6, 1, 2]
+    d.reset(prompt)
+    tree = d.propose_tree(prompt, 0, budget=3, width=2)
+    assert {tree.token_ids[i] for i in tree.children(0)} == {7, 9}
