@@ -276,6 +276,16 @@ def test_pld_tree_branches_on_forking_ngram():
     assert sorted(tree.token_ids[c] for c in tree.children(0)) == [7, 9]
 
 
+def test_pld_default_reaches_four_gram_matches():
+    from dejavuu.drafters import PLD
+
+    # The 4-gram [7,8,9,10] recurs (-> 99); the shorter [8,9,10] recurs more recently
+    # (-> 88). The default n_max=4 prefers the longer, more precise match.
+    ctx = [7, 8, 9, 10, 99, 5, 5, 5, 8, 9, 10, 88, 5, 5, 7, 8, 9, 10]
+    assert PLD().propose(ctx, 0, budget=3).token_ids[:2] == [10, 99]
+    assert PLD(n_max=3).propose(ctx, 0, budget=3).token_ids[:2] == [10, 88]  # old default
+
+
 def test_asam_tree_branches_from_longer_source():
     from dejavuu.drafters import ASAM
 

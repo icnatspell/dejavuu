@@ -9,7 +9,11 @@ class PLD(Drafter):
     """Prompt-lookup: longest trailing n-gram match over the context so far,
     return the following tokens as a chain. Pure CPU, stateless."""
 
-    def __init__(self, n_min: int = 1, n_max: int = 3):
+    def __init__(self, n_min: int = 1, n_max: int = 4):
+        # n_max=4 (not 3) wins on int8: a 4-gram match is more precise where it exists,
+        # and cheap multi-token verify rewards the extra reach. 5-grams recur too rarely
+        # to pay off. n_min stays 1 -- dropping 1-gram matches tripled draft precision but
+        # cut recall/acceptance, a bad trade when verify is cheap. See issue #43.
         self.n_min, self.n_max = n_min, n_max
 
     def propose(self, ctx: list[int], past_len: int, budget: int) -> DraftTree:
