@@ -11,8 +11,6 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from tqdm import tqdm
-
 from dejavuu.core import Sampler, generate
 from dejavuu.core.engine import GenResult
 from dejavuu.drafters import make_drafter as build_drafter
@@ -21,13 +19,6 @@ from dejavuu.eval.datasets import ConversationCase
 from dejavuu.eval.harness import Agg, first_divergence
 from dejavuu.eval.models import BenchmarkModel, ConversationHistory
 from dejavuu.eval.scorers import score_response
-
-
-@dataclass(frozen=True)
-class RunCase:
-    case_id: str
-    category: str
-    metadata: dict[str, object]
 
 
 @dataclass(frozen=True)
@@ -299,72 +290,3 @@ class BenchmarkRunner:
             for agg in category_aggs.values():
                 agg.finalize_repetitions()
         return RunResult(aggs, measurements, responses, divergences)
-
-
-def run_cases(
-    cases: list[RunCase],
-    methods: list[str],
-    model,
-    prepare: Callable[[RunCase, str], list[int]],
-    make_drafter: Callable[[str, RunCase], object],
-    decode: Callable[[list[int]], str],
-    *,
-    max_new: int,
-    budget: int,
-    eos: int | None,
-    tree: bool,
-    width: int,
-    sampler: Sampler | None = None,
-) -> tuple[dict[str, dict[str, Agg]], list[dict[str, object]], list[dict[str, object]]]:
-    """Run baseline first for every case and return aggregates, records, failures."""
-    aggs: dict[str, dict[str, Agg]] = {}
-    records: list[dict[str, object]] = []
-    failures: list[dict[str, object]] = []
-    for case in tqdm(cases, desc="prompts", unit="prompt"):
-        category_aggs = aggs.setdefault(case.category, {method: Agg() for method in methods})
-        baseline: list[int] | None = None
-        baseline_tps = 0.0
-        for method in methods:
-            prompt_ids = prepare(case, method)
-            drafter = make_drafter(method, case)
-            started = time.perf_counter()
-            result: GenResult = generate(
-                model,
-                prompt_ids,
-                max_new,
-                drafter,
-                budget,
-                eos,
-                tree=tree,
-                width=width,
-                sampler=sampler,
-            )
-            elapsed = time.perf_counter() - started
-            category_aggs[method].add(result, elapsed)
-            decode_s = elapsed - result.prefill_s - result.draft_setup_s
-            if method == "baseline":
-                baseline = result.tokens
-                baseline_tps = len(result.tokens) / decode_s if decode_s else 0.0
-            else:
-                assert baseline is not None
-                category_aggs[method].compare(result.tokens, baseline)
-                category_aggs[method].speedups(decode_s, len(result.tokens), baseline_tps)
-            record: dict[str, object] = {
-                "case_id": case.case_id,
-                "category": case.category,
-                "metadata": case.metadata,
-                "method": method,
-                "tokens": result.tokens,
-                "text": decode(result.tokens),
-                "baseline_tokens": baseline,
-                "exact": result.tokens == baseline,
-                "first_divergence": first_divergence(result.tokens, baseline or []),
-                "drafted": result.drafted,
-                "accepted": result.accepted,
-                "conditional_attempts": result.conditional_attempts,
-                "conditional_accepted": result.conditional_accepted,
-            }
-            records.append(record)
-            if method != "baseline" and not record["exact"]:
-                failures.append(record)
-    return aggs, records, failures
