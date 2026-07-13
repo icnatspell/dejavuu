@@ -27,9 +27,12 @@ from dejavuu.decoders.vlm import GENAI_DECODER, VLM, VLM_TREE_DECODER, download
 from dejavuu.eval.harness import (
     Agg,
     benchmark_metadata,
+    create_run_dir,
     load_datastore,
     make_drafter,
     render_table,
+    write_car_profile,
+    write_response_jsonl,
     write_run_manifest,
 )
 from dejavuu.eval.specbench import load_specbench
@@ -113,10 +116,35 @@ def main() -> None:
     )
     p.add_argument("--log", type=Path, default=None)
     p.add_argument("--csv", type=Path, default=None)
+    p.add_argument("--responses", type=Path, default=None, help="generated-response JSONL")
+    p.add_argument("--out", type=Path, default=None, help="immutable structured run directory")
     p.add_argument(
         "--threads", type=int, default=0, help="ORT intra-op threads per session (0 = ORT default)"
     )
     args = p.parse_args()
+    if args.out:
+        if args.csv or args.log or args.responses:
+            p.error(
+                "--out owns summary/log/response paths; do not combine it with --csv/--log/--responses"
+            )
+        create_run_dir(
+            args.out.parent,
+            args.out.name,
+            {
+                "schema_version": 1,
+                "dataset": args.dataset,
+                "decode": {
+                    "budget": args.budget,
+                    "max_new": args.max_new,
+                    "tree": args.tree,
+                    "width": args.width,
+                },
+                "runtime": {"provider": args.provider, "threads": args.threads},
+            },
+        )
+        args.csv = args.out / "summary.csv"
+        args.log = args.out / "logs" / "runner.log"
+        args.responses = args.out / "responses.jsonl"
 
     if args.log:
         args.log.parent.mkdir(parents=True, exist_ok=True)
@@ -166,6 +194,7 @@ def main() -> None:
     aggs: dict[str, dict[str, Agg]] = {}  # topic -> method -> Agg
     baseline_out: dict[int, list[int]] = {}
     baseline_tps: dict[int, float] = {}  # per-prompt baseline tps for the speedup mean
+    responses: list[dict[str, object]] = []
     for idx, item in enumerate(tqdm(prompts, desc="prompts", unit="q")):
         # Build the chat template once per prompt; for VLM splice vision per method
         # (prepare re-stashes prefill embeds), for text reuse the same ids.
@@ -211,6 +240,19 @@ def main() -> None:
             cat_aggs[m].add(r, dt)
             ddt = dt - r.prefill_s  # decode-only time (prefill excluded)
             results[m] = (r, ddt)
+            responses.append(
+                {
+                    "case_id": str(idx),
+                    "category": cat,
+                    "method": m,
+                    "tokens": r.tokens,
+                    "text": processor.tokenizer.decode(r.tokens, skip_special_tokens=True),
+                    "drafted": r.drafted,
+                    "accepted": r.accepted,
+                    "conditional_attempts": r.conditional_attempts,
+                    "conditional_accepted": r.conditional_accepted,
+                }
+            )
             if m == "baseline":
                 baseline_out[idx] = r.tokens
                 baseline_tps[idx] = len(r.tokens) / ddt if ddt else 0.0
@@ -235,6 +277,8 @@ def main() -> None:
         csv_path=args.csv,
     )
     if args.csv:
+        write_car_profile(args.csv, aggs)
+        write_response_jsonl(args.responses or args.csv.with_suffix(".responses.jsonl"), responses)
         write_run_manifest(
             args.csv,
             benchmark_metadata(

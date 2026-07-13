@@ -49,8 +49,9 @@ dejavuu = "dejavuu.cli:app"
 hf = ["torch>=2.4"]
 # Run a vision-language model: image preprocessing (torch/torchvision) + PIL decode.
 vlm = ["pillow>=10.0", "torch>=2.4", "torchvision>=0.19"]
-# Reproduce the benchmarks (Spec-Bench / MMSpec harnesses). Vision benches load images.
-bench = ["dejavuu[vlm]"]
+# Reproduce the benchmarks (Spec-Bench / SPEED-Bench / MMSpec harnesses). Vision benches
+# load images; SPEED-Bench uses the HF dataset loader for its versioned parquet splits.
+bench = ["datasets>=3.0", "dejavuu[vlm]"]
 # Offline model-build toolchain (dejavuu.tools.*): ONNX export + weight-only int4/int8
 # quantization. Heavy and build-only, never needed at inference time.
 build = [

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import cache
 
 import numpy as np
@@ -35,6 +35,11 @@ class GenResult:
     root_proposals: int = 0
     root_top1: int = 0
     root_top5: int = 0
+    # Position-conditioned acceptance telemetry. Index 0 is the first draft
+    # position below the anchor. A depth joins the denominator only when the
+    # target path reached it and the drafter supplied a candidate there.
+    conditional_attempts: list[int] = field(default_factory=list)
+    conditional_accepted: list[int] = field(default_factory=list)
 
 
 @cache  # warn once per model class, not every prompt
@@ -63,6 +68,24 @@ def _accept_chain(
             return emitted, len(emitted) - 1
         emitted.append(pred)
         node = child
+
+
+def _record_conditional_acceptance(res: GenResult, opportunities: int, accepted: int) -> None:
+    """Accumulate conditional acceptance rate (CAR) counts by target-path depth.
+
+    CAR[d] asks: after depths before d were accepted, how often did the drafter's
+    candidate at d match the verifier? It intentionally excludes unreachable tree
+    siblings and absent candidates, so chain and tree results share one definition.
+    """
+    if opportunities < accepted:
+        raise ValueError("accepted draft positions cannot exceed CAR opportunities")
+    while len(res.conditional_attempts) < opportunities:
+        res.conditional_attempts.append(0)
+        res.conditional_accepted.append(0)
+    for depth in range(opportunities):
+        res.conditional_attempts[depth] += 1
+        if depth < accepted:
+            res.conditional_accepted[depth] += 1
 
 
 def generate(
@@ -131,10 +154,14 @@ def generate(
         committed_old = committed
         if use_tree:
             emitted, n_acc, path = treelib.accept(dtree, logits, sampler, committed)
+            # Every accepted child was an opportunity. The next position joins the
+            # denominator only when the final accepted node has another candidate.
+            _record_conditional_acceptance(res, n_acc + int(bool(dtree.children(path[-1]))), n_acc)
             committed += len(path)  # anchor + accepted path nodes
             past = model.gather_kv(present, committed_old, path)
         else:
             emitted, n_acc = _accept_chain(dtree, logits, sampler, committed)
+            _record_conditional_acceptance(res, min(guesses, n_acc + 1), n_acc)
             path = list(range(n_acc + 1))  # root + accepted guesses (contiguous)
             committed += n_acc + 1  # anchor + accepted guesses; bonus is next anchor
             past = model.rollback_kv(present, committed)
@@ -229,10 +256,12 @@ def generate_seeded(
         committed_old = committed
         if use_tree:
             emitted, n_acc, path = treelib.accept(dtree, logits, None, committed)
+            _record_conditional_acceptance(res, n_acc + int(bool(dtree.children(path[-1]))), n_acc)
             committed += len(path)
             past = model.gather_kv(present, committed_old, path)
         else:
             emitted, n_acc = _accept_chain(dtree, logits, None, committed)
+            _record_conditional_acceptance(res, min(guesses, n_acc + 1), n_acc)
             path = list(range(n_acc + 1))
             committed += n_acc + 1
             past = model.rollback_kv(present, committed)

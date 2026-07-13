@@ -22,12 +22,16 @@ from tqdm import tqdm
 from dejavuu.core import Sampler, generate
 from dejavuu.decoders.text import Model, download
 from dejavuu.drafters import Cacheback
+from dejavuu.eval.datasets import load_speedbench
 from dejavuu.eval.harness import (
     Agg,
     benchmark_metadata,
+    create_run_dir,
     load_datastore,
     make_drafter,
     render_table,
+    write_car_profile,
+    write_response_jsonl,
     write_run_manifest,
 )
 
@@ -102,6 +106,7 @@ def load_specbench(workload: str, n: int, per_category: int = 0) -> list[tuple[s
 
 def main() -> None:
     p = argparse.ArgumentParser("dejavuu.eval.specbench")
+    p.add_argument("--dataset", choices=["specbench", "speedbench"], default="specbench")
     p.add_argument("--methods", default="baseline,pld,token_recycling")
     p.add_argument("--workload", default="repetitive")
     p.add_argument("--model-path", type=Path, default=None, help="built decoder directory")
@@ -144,10 +149,35 @@ def main() -> None:
     )
     p.add_argument("--log", type=Path, default=None)
     p.add_argument("--csv", type=Path, default=None)
+    p.add_argument("--responses", type=Path, default=None, help="generated-response JSONL")
+    p.add_argument("--out", type=Path, default=None, help="immutable structured run directory")
     p.add_argument(
         "--threads", type=int, default=0, help="ORT intra-op threads per session (0 = ORT default)"
     )
     args = p.parse_args()
+    if args.out:
+        if args.csv or args.log or args.responses:
+            p.error(
+                "--out owns summary/log/response paths; do not combine it with --csv/--log/--responses"
+            )
+        create_run_dir(
+            args.out.parent,
+            args.out.name,
+            {
+                "schema_version": 1,
+                "dataset": args.dataset,
+                "decode": {
+                    "budget": args.budget,
+                    "max_new": args.max_new,
+                    "tree": args.tree,
+                    "width": args.width,
+                },
+                "runtime": {"provider": args.provider, "threads": args.threads},
+            },
+        )
+        args.csv = args.out / "summary.csv"
+        args.log = args.out / "logs" / "runner.log"
+        args.responses = args.out / "responses.jsonl"
     sampler = Sampler(args.temperature, args.top_p, args.seed) if args.temperature > 0 else None
 
     if args.log:
@@ -166,7 +196,25 @@ def main() -> None:
     from transformers import AutoTokenizer
 
     tok = AutoTokenizer.from_pretrained(model.root)
-    prompts = load_specbench(args.workload, args.n, args.per_category)
+    if args.dataset == "speedbench":
+        cases = load_speedbench()
+        if args.per_category:
+            seen: Counter[str] = Counter()
+            cases = [
+                c
+                for c in cases
+                if seen[c.category] < args.per_category and not seen.update([c.category])
+            ]
+        else:
+            cases = cases[: args.n]
+        prompts = [(c.case_id, c.category, c.prompt, c.metadata) for c in cases]
+    else:
+        prompts = [
+            (str(i), category, prompt, {})
+            for i, (category, prompt) in enumerate(
+                load_specbench(args.workload, args.n, args.per_category)
+            )
+        ]
     datastore = load_datastore(args.datastore, tok) if args.datastore else None
     logger.info(
         "{} prompts | budget={} max_new={}{}{} | methods={}",
@@ -191,7 +239,10 @@ def main() -> None:
     aggs: dict[str, dict[str, Agg]] = {}  # topic -> method -> Agg
     baseline_out: dict[int, list[int]] = {}  # keyed by prompt index for the exactness gate
     baseline_tps: dict[int, float] = {}  # per-prompt baseline tps for the speedup mean
-    for idx, (cat, prompt) in enumerate(tqdm(prompts, desc="prompts", unit="prompt")):
+    responses: list[dict[str, object]] = []
+    for idx, (case_id, cat, prompt, case_metadata) in enumerate(
+        tqdm(prompts, desc="prompts", unit="prompt")
+    ):
         cat_aggs = aggs.setdefault(cat, {m: Agg() for m in methods})
         ids = tok(prompt)["input_ids"]
         results: dict[str, tuple] = {}
@@ -221,6 +272,20 @@ def main() -> None:
             cat_aggs[m].add(r, dt)
             ddt = dt - r.prefill_s  # decode-only time (prefill excluded)
             results[m] = (r, ddt)
+            responses.append(
+                {
+                    "case_id": case_id,
+                    "category": cat,
+                    "metadata": case_metadata,
+                    "method": m,
+                    "tokens": r.tokens,
+                    "text": tok.decode(r.tokens, skip_special_tokens=True),
+                    "drafted": r.drafted,
+                    "accepted": r.accepted,
+                    "conditional_attempts": r.conditional_attempts,
+                    "conditional_accepted": r.conditional_accepted,
+                }
+            )
             if m == "baseline":
                 baseline_out[idx] = r.tokens
                 baseline_tps[idx] = len(r.tokens) / ddt if ddt else 0.0
@@ -235,17 +300,19 @@ def main() -> None:
 
     scope = f"{args.per_category}/topic" if args.per_category else args.workload
     render_table(
-        f"Spec-Bench / {scope} / {args.variant} (n={len(prompts)})",
+        f"{args.dataset} / {scope} / {args.variant} (n={len(prompts)})",
         methods,
         aggs,
         args.log,
         csv_path=args.csv,
     )
     if args.csv:
+        write_car_profile(args.csv, aggs)
+        write_response_jsonl(args.responses or args.csv.with_suffix(".responses.jsonl"), responses)
         write_run_manifest(
             args.csv,
             benchmark_metadata(
-                dataset="specbench",
+                dataset=args.dataset,
                 model=f"{model.root}:{args.variant}",
                 provider=args.provider,
                 threads=args.threads,

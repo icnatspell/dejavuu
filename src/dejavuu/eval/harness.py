@@ -8,6 +8,7 @@ import csv
 import json
 import os
 import platform
+import re
 from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -28,9 +29,12 @@ __all__ = [
     "DRAFTERS",
     "Agg",
     "benchmark_metadata",
+    "create_run_dir",
     "load_datastore",
     "make_drafter",
     "render_table",
+    "write_car_profile",
+    "write_response_jsonl",
     "write_run_manifest",
 ]
 
@@ -61,6 +65,19 @@ def benchmark_metadata(
     }
 
 
+def create_run_dir(root: Path, name: str, manifest: dict[str, object]) -> Path:
+    """Create one non-appendable benchmark run directory and its manifest.
+
+    A run directory is the comparison unit: summary, CAR, responses, failures, and
+    logs beneath it all share exactly one immutable decode configuration.
+    """
+    slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
+    path = root / slug
+    path.mkdir(parents=True, exist_ok=False)
+    (path / "manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+    return path
+
+
 def write_run_manifest(csv_path: Path, metadata: dict[str, object]) -> Path:
     """Write stable, machine-readable run metadata beside a benchmark CSV.
 
@@ -73,6 +90,62 @@ def write_run_manifest(csv_path: Path, metadata: dict[str, object]) -> Path:
     manifest.parent.mkdir(parents=True, exist_ok=True)
     manifest.write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n")
     return manifest
+
+
+def write_car_profile(csv_path: Path, aggs: dict[str, dict[str, Agg]]) -> Path:
+    """Write conditional acceptance rate at every reached draft position.
+
+    A long-form sidecar keeps the summary CSV readable while preserving the curve
+    needed to distinguish a strong first guess from a continuation that stays useful.
+    The denominator counts only target-path positions that were actually proposed.
+    """
+    profile = csv_path.with_suffix(".car.csv")
+    profile.parent.mkdir(parents=True, exist_ok=True)
+    with profile.open("w", newline="") as f:
+        writer = csv.DictWriter(
+            f,
+            fieldnames=[
+                "category",
+                "method",
+                "depth",
+                "opportunities",
+                "accepted",
+                "conditional_acceptance",
+            ],
+        )
+        writer.writeheader()
+        for category, method_aggs in sorted(aggs.items()):
+            for method, agg in sorted(method_aggs.items()):
+                for depth, opportunities in enumerate(agg.conditional_attempts, start=1):
+                    accepted = agg.conditional_accepted[depth - 1]
+                    writer.writerow(
+                        {
+                            "category": category,
+                            "method": method,
+                            "depth": depth,
+                            "opportunities": opportunities,
+                            "accepted": accepted,
+                            "conditional_acceptance": f"{accepted / opportunities:.4f}"
+                            if opportunities
+                            else "",
+                        }
+                    )
+    logger.info("CAR profile -> {}", profile)
+    return profile
+
+
+def write_response_jsonl(path: Path, records: list[dict[str, object]]) -> Path:
+    """Persist one generated response per benchmark case and method.
+
+    Summary metrics reveal a regression; these records make it inspectable by keeping
+    the case identity, decoded output, token ids, and caller-supplied run telemetry.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w") as f:
+        for record in records:
+            f.write(json.dumps(record, sort_keys=True) + "\n")
+    logger.info("responses -> {}", path)
+    return path
 
 
 def load_datastore(path: Path, tokenizer) -> list[list[int]]:
@@ -96,6 +169,8 @@ class Agg:
     exact: bool = True  # strict gate (text): any per-prompt mismatch flips it
     cmp_tok: int = 0  # tokens compared vs baseline (non-strict / VLM match %)
     match_tok: int = 0
+    conditional_attempts: list[int] = field(default_factory=list)
+    conditional_accepted: list[int] = field(default_factory=list)
     ratios: list[float] = field(default_factory=list)  # per-prompt tps/baseline_tps
     # per-prompt samples for mean +/- std (tps, accept len/%, the four ms timings);
     # pooled sums above stay for speedup(batch) and the exactness gate.
@@ -111,6 +186,12 @@ class Agg:
         self.verify_s += r.verify_s
         self.learn_s += r.learn_s
         self.prefill_s += r.prefill_s
+        while len(self.conditional_attempts) < len(r.conditional_attempts):
+            self.conditional_attempts.append(0)
+            self.conditional_accepted.append(0)
+        for depth, opportunities in enumerate(r.conditional_attempts):
+            self.conditional_attempts[depth] += opportunities
+            self.conditional_accepted[depth] += r.conditional_accepted[depth]
         ddt = dt - r.prefill_s  # decode-only wallclock
         st = r.steps or 1
         s = self.series

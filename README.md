@@ -229,6 +229,23 @@ uv run python -m dejavuu.eval.specbench \
     --methods baseline,pld,pld_plus,adapld --per-category 20 --tree --width 2
 ```
 
+Use the unified selector for benchmark datasets. `speedbench` defaults to NVIDIA's
+diverse qualitative split; its throughput-named splits are context-length workloads in
+this single-request ONNX Runtime harness, not batched-server throughput claims.
+
+```bash
+uv run --extra bench python -m dejavuu.eval.bench --dataset speedbench \
+    --model-path ~/.cache/dejavuu/Qwen-Qwen3-0.6B --variant q4 --per-category 20 \
+    --threads 4 --budget 8 --tree --width 2 --csv results/qwen_speed.csv
+uv run --extra bench python -m dejavuu.eval.bench --dataset mmspec \
+    --per-category 10 --threads 4 --budget 8 --tree --width 2 --csv results/smol_mmspec.csv
+```
+
+Every CSV run also writes `*.car.csv`, the conditional acceptance rate at each reached
+draft position, and `*.responses.jsonl`, one decoded response and its token/acceptance
+telemetry per case and method. These sidecars make a poor aggregate result inspectable
+without rerunning it.
+
 Results land in `results/{specbench,mmspec}.{csv,log}`. The four knobs are positional,
 `scripts/bench_all.sh <K> <IMG> <THREADS> <TREE>`:
 

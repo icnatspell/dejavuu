@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Run every drafter through tree verification for each graph available in a decoder dir.
 # Usage: ./scripts/bench_tree.sh ~/.cache/dejavuu/qwen-qwen3-0.6b
-# Optional environment: K=80 BUDGET=8 WIDTH=2 THREADS=0 PROVIDER=cpu MAX_NEW=128.
+# Optional environment: K=80 BUDGET=8 WIDTH=2 THREADS=4 PROVIDER=cpu MAX_NEW=128.
 set -euo pipefail
 
 if [ "$#" -ne 1 ]; then
@@ -13,7 +13,9 @@ DECODER=$1
 K=${K:-20}
 BUDGET=${BUDGET:-8}
 WIDTH=${WIDTH:-2}
-THREADS=${THREADS:-0}
+# Four intra-op threads leaves four physical cores available for the OS and avoids
+# oversubscription on the 8-core benchmark host. Keep this fixed across every sweep.
+THREADS=${THREADS:-4}
 PROVIDER=${PROVIDER:-cpu}
 MAX_NEW=${MAX_NEW:-128}
 STORE=${STORE:-data/specbench_corpus.txt}
