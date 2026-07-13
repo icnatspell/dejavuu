@@ -27,7 +27,11 @@ from dejavuu.core.verifier import KVCache, Verifier
 from dejavuu.decoders.ort import OrtDecoder, make_session
 
 REPO = "onnx-community/gemma-3-270m-ONNX"
-ONNX_FILES = {"q4": "onnx/model_q4.onnx", "int8": "onnx/model_int8.onnx"}
+ONNX_FILES = {
+    "fp32": "onnx/model_fp32.onnx",
+    "q4": "onnx/model_q4.onnx",
+    "int8": "onnx/model_int8.onnx",
+}
 
 
 def download(variant: str = "q4") -> Path:

@@ -208,6 +208,27 @@ tail -f results/run.out
 ./scripts/bench_all.sh 80 512 0 1
 ```
 
+To build a tree-capable text decoder for another conventional causal language model
+(Qwen3, Llama, or Mistral) and benchmark it, use the reproducible wrappers. The
+builder writes `fp32`, `int8`, and mixed-body `q4` graphs plus the tokenizer into one
+decoder directory. The tree bench runs every registered drafter against each graph that
+exists, always comparing a speculative method with that graph's own baseline.
+
+```bash
+./scripts/build_decoder.sh Qwen/Qwen3-0.6B
+./scripts/bench_tree.sh ~/.cache/dejavuu/Qwen-Qwen3-0.6B
+```
+
+For a direct text run, `--model-path` selects that decoder directory and `--variant`
+selects the graph. `fp32` is available only from a built directory; the published
+Gemma snapshot still supplies the legacy `q4` and `int8` defaults.
+
+```bash
+uv run python -m dejavuu.eval.specbench \
+    --model-path ~/.cache/dejavuu/Qwen-Qwen3-0.6B --variant fp32 \
+    --methods baseline,pld,pld_plus,adapld --per-category 20 --tree --width 2
+```
+
 Results land in `results/{specbench,mmspec}.{csv,log}`. The four knobs are positional,
 `scripts/bench_all.sh <K> <IMG> <THREADS> <TREE>`:
 

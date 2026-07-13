@@ -36,6 +36,20 @@ SPEC_BENCH_URL = (
 )
 CACHE = Path.home() / ".cache" / "dejavuu"
 
+
+def resolve_model_root(model_path: Path | None, variant: str) -> Path:
+    """Return an explicit built-decoder directory or the bundled model snapshot.
+
+    `variant` remains separate because one decoder directory contains fp32, int8,
+    and q4 graphs. This keeps every quantized run comparable to its own baseline.
+    """
+    if model_path is not None:
+        return model_path
+    if variant == "fp32":
+        raise ValueError("--variant fp32 requires --model-path to a built decoder directory")
+    return download(variant)
+
+
 # Group Spec-Bench's native categories by topic for reporting. The 8 MT-bench
 # subcategories (the genuinely multi-turn rows) collapse into one topic; note
 # `math` (MT-bench) != `math_reasoning` (GSM8K).
@@ -90,7 +104,8 @@ def main() -> None:
     p = argparse.ArgumentParser("dejavuu.eval.specbench")
     p.add_argument("--methods", default="baseline,pld,token_recycling")
     p.add_argument("--workload", default="repetitive")
-    p.add_argument("--variant", choices=["q4", "int8"], default="q4")
+    p.add_argument("--model-path", type=Path, default=None, help="built decoder directory")
+    p.add_argument("--variant", choices=["fp32", "q4", "int8"], default="q4")
     p.add_argument("--provider", choices=["cpu", "cuda"], default="cpu")
     p.add_argument("--n", type=int, default=20)
     p.add_argument(
@@ -142,7 +157,12 @@ def main() -> None:
     methods = args.methods.split(",")
     if "baseline" in methods:  # must run first: every method's exactness/speedup is vs it
         methods = ["baseline", *(m for m in methods if m != "baseline")]
-    model = Model(download(args.variant), args.variant, args.provider, threads=args.threads)
+    model = Model(
+        resolve_model_root(args.model_path, args.variant),
+        args.variant,
+        args.provider,
+        threads=args.threads,
+    )
     from transformers import AutoTokenizer
 
     tok = AutoTokenizer.from_pretrained(model.root)
