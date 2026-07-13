@@ -57,8 +57,10 @@ class LogitSpec(Drafter):
         k = min(self.k, logits.shape[-1])
         if k <= 0:
             return
-        topk = np.argpartition(-logits, k - 1, axis=-1)[:, :k]
+        # ponytail: partition around the k-largest directly -- no negating the whole
+        # [N, vocab] logit matrix; the k-wide argsort below still orders them descending.
         rows = np.arange(len(input_tokens))[:, None]
+        topk = np.argpartition(logits, -k, axis=-1)[:, -k:]
         topk = np.take_along_axis(topk, np.argsort(-logits[rows, topk], axis=-1), axis=-1)
         for i, (token, candidates) in enumerate(zip(input_tokens, topk, strict=True)):
             ranked = [int(candidate) for candidate in candidates]

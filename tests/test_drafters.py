@@ -123,6 +123,55 @@ def test_cacheback_frozen_builder_keeps_documents_separate():
     assert payload["entries"] == []  # no pair may span the document boundary
 
 
+def test_stand_reuses_verifier_logits_for_an_ngram_tree():
+    from dejavuu.drafters import STAND
+
+    stand = STAND(order=2, k=2)
+    logits = np.full((2, 8), -9.0, np.float32)
+    logits[1, 5], logits[1, 6] = 9.0, 8.0  # context (1, 2) predicts {5, 6}
+    stand.observe([1, 2], logits)
+
+    tree = stand.propose_tree([1, 2], past_len=2, budget=2, width=2)
+    assert sorted(tree.token_ids[node] for node in tree.children(0)) == [5, 6]
+
+
+def test_stand_extends_a_branch_with_its_new_ngram_context():
+    from dejavuu.drafters import STAND
+
+    stand = STAND(order=2, k=1)
+    logits = np.full((2, 8), -9.0, np.float32)
+    logits[1, 5] = 9.0
+    stand.observe([1, 2], logits)  # (1, 2) -> 5
+    logits[1, 7] = 10.0
+    stand.observe([2, 5], logits)  # (2, 5) -> 7
+
+    assert stand.propose_tree([1, 2], past_len=2, budget=2, width=1).token_ids == [2, 5, 7]
+
+
+def test_stand_adapts_its_chain_cap_from_accepted_drafts():
+    from dejavuu.drafters import STAND
+
+    stand = STAND(max_draft=6)
+    stand.cap = 2
+    stand._proposed = 2
+    stand.update([1, 2, 3])  # two guesses accepted, plus the verifier bonus
+    assert stand.cap == 3
+    stand._proposed = 5
+    stand.update([1, 2])  # one accepted guess: shrink an over-long next proposal
+    assert stand.cap < 3
+
+
+def test_stand_backs_off_to_a_shorter_observed_suffix():
+    from dejavuu.drafters import STAND
+
+    stand = STAND(order=4, k=1)
+    logits = np.full((4, 8), -9.0, np.float32)
+    logits[3, 6] = 9.0
+    stand.observe([1, 2, 3, 4], logits)  # suffix (4,) predicts 6
+
+    assert stand.propose([9, 8, 7, 4], past_len=4, budget=1).token_ids == [4, 6]
+
+
 def test_rest_ignores_live_ctx_uses_datastore():
     rest = REST(datastore=[[7, 8, 9, 10, 11]], min_match=2)
     rest.reset([7, 8, 9])

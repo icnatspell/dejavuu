@@ -32,6 +32,9 @@ class GenResult:
     verify_s: float = 0.0  # cumulative time in model.forward
     learn_s: float = 0.0  # cumulative time in the post-verify drafter callbacks
     prefill_s: float = 0.0  # one-time prompt prefill (kept out of per-step overhead)
+    root_proposals: int = 0
+    root_top1: int = 0
+    root_top5: int = 0
 
 
 @cache  # warn once per model class, not every prompt
@@ -95,6 +98,7 @@ def generate(
         if drafter is None:
             dtree = DraftTree.chain([seq[-1]])
         else:
+            drafter.set_sampling(sampler, committed, use_tree)
             t0 = time.perf_counter()
             dtree = (
                 drafter.propose_tree(seq, committed, budget, width)
@@ -115,6 +119,12 @@ def generate(
         res.verify_s += step_verify_s
         res.steps += 1
         res.drafted += guesses
+        if guesses:
+            root_children = {dtree.token_ids[c] for c in dtree.children(0)}
+            ranked = np.argpartition(-logits[0], min(4, len(logits[0]) - 1))[:5]
+            res.root_proposals += 1
+            res.root_top1 += int(int(logits[0].argmax()) in root_children)
+            res.root_top5 += int(any(int(token) in root_children for token in ranked))
         if drafter is not None:
             drafter.note_cost(step_verify_s, guesses)
 

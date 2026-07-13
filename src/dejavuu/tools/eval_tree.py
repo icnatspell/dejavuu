@@ -30,7 +30,7 @@ from transformers import (
 from dejavuu.core.engine import generate
 from dejavuu.core.verifier import KVCache, Verifier
 from dejavuu.decoders.vlm import REPO
-from dejavuu.drafters import AdaPLD, PLDPlus, SuffixDecoding, TokenRecycling
+from dejavuu.drafters import AdaPLD, PLDPlus, STAND, SuffixDecoding, TokenRecycling
 
 
 class TorchTreeDecoder(Verifier):
@@ -145,6 +145,8 @@ def main(max_new: int = 24, budget: int = 8, width: int = 3) -> None:
     run("suffix tree", lambda: SuffixDecoding(min_match=1), True)
     run("token_recycling chain", lambda: TokenRecycling(), False)
     run("token_recycling tree", lambda: TokenRecycling(), True)
+    run("stand chain", lambda: STAND(order=2), False)
+    run("stand tree", lambda: STAND(order=2), True)
     run("pld_plus chain", lambda: PLDPlus(), False)
     run("adapld chain", lambda: AdaPLD(), False)
     run("adapld tree", lambda: AdaPLD(), True)
