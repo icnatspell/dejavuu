@@ -4,9 +4,9 @@ degenerate budgets/lengths. Model-free -- a toy verifier with a deterministic cy
 
 import numpy as np
 
-from dejavuu.core.engine import generate
+from dejavuu.core.engine import generate, generate_seeded
 from dejavuu.core.verifier import KVCache, Verifier
-from dejavuu.drafters import PLD, SuffixDecoding
+from dejavuu.drafters import PLD, LogitSpec, SuffixDecoding
 
 
 class _Cyc(Verifier):
@@ -66,3 +66,19 @@ def test_max_new_zero_emits_nothing():
 def test_single_token_prompt_prefill():
     # len<=1 prompt: prefill returns an empty KV with committed=0, then decodes normally.
     assert generate(_Cyc(), [2], 4).tokens == [3, 4, 5, 0]
+
+
+def test_seeded_root_matches_plain_greedy_decode():
+    """A root selected from prefill logits is target-correct, so verifying the
+    descendants must preserve ordinary greedy decoding."""
+    m = _Cyc()
+    baseline = generate(m, [0, 1, 2], 20)
+    seeded = generate_seeded(m, [0, 1, 2], 20, PLD())
+    assert seeded.tokens == baseline.tokens
+
+
+def test_seeded_root_keeps_logitspec_greedy_output_lossless():
+    m = _Cyc()
+    baseline = generate(m, [0, 1, 2], 20)
+    seeded = generate_seeded(m, [0, 1, 2], 20, LogitSpec())
+    assert seeded.tokens == baseline.tokens

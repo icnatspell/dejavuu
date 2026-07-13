@@ -150,3 +150,96 @@ def generate(
             if (eos is not None and t == eos) or len(res.tokens) >= max_new:
                 return res
     return res
+
+
+def generate_seeded(
+    model: Verifier,
+    prompt_ids: list[int],
+    max_new: int,
+    drafter: Drafter,
+    budget: int = 8,
+    eos: int | None = None,
+    on_emit: Callable[[int, bool], None] | None = None,
+    tree: bool = False,
+    width: int = 2,
+) -> GenResult:
+    """Prototype seeded-root verification for greedy decoding.
+
+    Full-prompt prefill supplies the first root from target logits.  Each forward
+    then verifies only its descendants; its correction token becomes the known root
+    for the following step.  This deliberately sits beside ``generate`` while we
+    measure whether the alternate state convention improves LogitSpec acceptance.
+    """
+    if max_new <= 0:
+        return GenResult(tokens=[])
+    use_tree = tree and model.supports_tree
+    seq = list(prompt_ids)
+    t0 = time.perf_counter()
+    past, committed, root_logits = model.prefill_seeded(seq)
+    prefill_s = time.perf_counter() - t0
+    drafter.reset(seq)
+    res = GenResult(tokens=[], prefill_s=prefill_s)
+    root = int(root_logits.argmax())
+    seq.append(root)  # known target output, still uncommitted in the KV
+    # LogitSpec's observation hook can use the prefill distribution to construct
+    # children below this known root. Other drafters leave this side channel unused.
+    drafter.observe([root], root_logits[None, :])
+    res.tokens.append(root)
+    drafter.update([root])
+    if on_emit is not None:
+        on_emit(root, True)
+    if (eos is not None and root == eos) or len(res.tokens) >= max_new:
+        return res
+
+    while len(res.tokens) < max_new:
+        t0 = time.perf_counter()
+        dtree = (
+            drafter.propose_tree(seq, committed, budget, width)
+            if use_tree
+            else drafter.propose(seq, committed, budget)
+        )
+        res.draft_s += time.perf_counter() - t0
+        if dtree.token_ids[0] != root:
+            raise ValueError("seeded drafter must retain the known root")
+        guesses = len(dtree.token_ids) - 1
+
+        t0 = time.perf_counter()
+        if use_tree:
+            pos = treelib.positions(dtree.parent, committed)
+            bias = treelib.mask(dtree.parent, committed)
+            logits, present, hidden = model.forward(dtree.token_ids, past, committed, pos, bias)
+        else:
+            logits, present, hidden = model.forward(dtree.token_ids, past, committed)
+        step_verify_s = time.perf_counter() - t0
+        res.verify_s += step_verify_s
+        res.steps += 1
+        res.drafted += guesses
+        drafter.note_cost(step_verify_s, guesses)
+
+        committed_old = committed
+        if use_tree:
+            emitted, n_acc, path = treelib.accept(dtree, logits, None, committed)
+            committed += len(path)
+            past = model.gather_kv(present, committed_old, path)
+        else:
+            emitted, n_acc = _accept_chain(dtree, logits, None, committed)
+            path = list(range(n_acc + 1))
+            committed += n_acc + 1
+            past = model.rollback_kv(present, committed)
+        res.accepted += n_acc
+        drafter.observe(dtree.token_ids, logits)
+        # The final accepted node's logits selected ``emitted[-1]``. Associate that
+        # fresh distribution with the correction/root for the next seeded step.
+        drafter.observe([emitted[-1]], logits[path[-1] : path[-1] + 1])
+        if hidden is not None:
+            drafter.observe_hidden([dtree.token_ids[i] for i in path], hidden[path], committed_old)
+        drafter.update(emitted)
+        seq.extend(emitted)
+        for i, token in enumerate(emitted):
+            res.tokens.append(token)
+            if on_emit is not None:
+                on_emit(token, i < n_acc)
+            if (eos is not None and token == eos) or len(res.tokens) >= max_new:
+                return res
+        root = emitted[-1]  # target correction; it is the next uncommitted root
+    return res

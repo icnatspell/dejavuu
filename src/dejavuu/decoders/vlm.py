@@ -141,3 +141,13 @@ class VLM(Verifier):
             return super().prefill(prompt_ids)
         _, past, _ = self._dec.run(embeds[:-1], self.empty_kv(), 0)
         return past, len(prompt_ids) - 1
+
+    def prefill_seeded(self, prompt_ids: list[int]) -> tuple[KVCache, int, np.ndarray]:
+        """Seeded-root prefill, preserving prepared image embeddings through the
+        complete prompt so the final target logits can select the first root."""
+        embeds = self._prefill_embeds
+        self._prefill_embeds = None
+        if embeds is None:
+            return super().prefill_seeded(prompt_ids)
+        logits, past, _ = self._dec.run(embeds, self.empty_kv(), 0)
+        return past, len(prompt_ids), logits[-1]
