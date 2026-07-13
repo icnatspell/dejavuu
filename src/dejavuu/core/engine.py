@@ -30,6 +30,7 @@ class GenResult:
     drafted: int = 0  # draft guesses proposed
     draft_s: float = 0.0  # cumulative time in drafter.propose
     verify_s: float = 0.0  # cumulative time in model.forward
+    learn_s: float = 0.0  # cumulative time in the post-verify drafter callbacks
     prefill_s: float = 0.0  # one-time prompt prefill (kept out of per-step overhead)
     root_proposals: int = 0
     root_top1: int = 0
@@ -140,11 +141,16 @@ def generate(
         res.accepted += n_acc
 
         if drafter is not None:
+            # learn = the drafter digesting this step (observe caches verifier logits,
+            # update adapts draft length). Timed apart from accept/KV so logit-reuse
+            # drafters (STAND, Token Recycling) don't hide their O(vocab) cost in overhead.
+            t0 = time.perf_counter()
             drafter.observe(dtree.token_ids, logits)
             if hidden is not None:  # side channel for representation-aware drafters
                 acc_tokens = [dtree.token_ids[i] for i in path]
                 drafter.observe_hidden(acc_tokens, hidden[path], committed_old)
             drafter.update(emitted)
+            res.learn_s += time.perf_counter() - t0
 
         for i, t in enumerate(emitted):
             seq.append(t)
