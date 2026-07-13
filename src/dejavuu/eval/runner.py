@@ -207,6 +207,7 @@ class BenchmarkRunner:
                                 if spec.decode.temperature > 0
                                 else None
                             ),
+                            accept_top_k=spec.decode.accept_top_k,
                         )
                         generation_s = self.clock() - started
                         group[method] = _Completed(

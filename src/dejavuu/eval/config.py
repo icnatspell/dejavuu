@@ -44,6 +44,10 @@ class DecodeSpec(BaseModel):
     seed: int = 0
     tree: bool = False
     width: int = Field(2, ge=1)
+    # Loose (lossy) top-k acceptance: 1 = exact lossless (default); >1 accepts a drafted
+    # token in the target's top-k, trading token identity for speed. Quality cost is
+    # measured against the greedy baseline via the response scorers.
+    accept_top_k: int = Field(1, ge=1)
 
 
 class MeasurementSpec(BaseModel):
