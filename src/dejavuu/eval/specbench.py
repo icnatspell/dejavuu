@@ -11,23 +11,19 @@ from __future__ import annotations
 
 import argparse
 import json
-import time
 import urllib.request
 from collections import Counter
 from pathlib import Path
 
 from loguru import logger
-from tqdm import tqdm
 
-from dejavuu.core import Sampler, generate
+from dejavuu.core import Sampler
 from dejavuu.decoders.text import Model, download
 from dejavuu.drafters import Cacheback
 from dejavuu.eval.datasets import load_speedbench
 from dejavuu.eval.harness import (
-    Agg,
     benchmark_metadata,
     create_run_dir,
-    first_divergence,
     load_datastore,
     make_drafter,
     render_table,
@@ -35,6 +31,7 @@ from dejavuu.eval.harness import (
     write_response_jsonl,
     write_run_manifest,
 )
+from dejavuu.eval.runner import RunCase, run_cases
 
 SPEC_BENCH_URL = (
     "https://raw.githubusercontent.com/hemingkx/Spec-Bench/main/data/spec_bench/question.jsonl"
@@ -227,8 +224,8 @@ def main() -> None:
         methods,
     )
 
-    # One drafter instance per method for the whole run: stateful drafters (REST,
-    # SuffixDecoding, Token Recycling) accumulate history across prompts.
+    # Stateful drafters persist across cases unless the explicit cold-cache switch
+    # rebuilds them through the runner's per-case factory.
     drafters = {
         m: (
             Cacheback.from_frozen(args.cacheback_frozen)
@@ -237,72 +234,32 @@ def main() -> None:
         )
         for m in methods
     }
-    aggs: dict[str, dict[str, Agg]] = {}  # topic -> method -> Agg
-    baseline_out: dict[int, list[int]] = {}  # keyed by prompt index for the exactness gate
-    baseline_tps: dict[int, float] = {}  # per-prompt baseline tps for the speedup mean
-    responses: list[dict[str, object]] = []
-    for idx, (case_id, cat, prompt, case_metadata) in enumerate(
-        tqdm(prompts, desc="prompts", unit="prompt")
-    ):
-        cat_aggs = aggs.setdefault(cat, {m: Agg() for m in methods})
-        ids = tok(prompt)["input_ids"]
-        results: dict[str, tuple] = {}
-        for m in methods:
-            # Construction happens before timing: frozen-table loading is online-once,
-            # not a decode-loop throughput gain or cost.
-            drafter = (
-                Cacheback.from_frozen(args.cacheback_frozen)
-                if args.reset_drafter_per_prompt and m == "cacheback" and args.cacheback_frozen
-                else make_drafter(m, datastore)
-                if args.reset_drafter_per_prompt
-                else drafters[m]
-            )
-            t = time.time()
-            r = generate(
-                model,
-                ids,
-                args.max_new,
-                drafter,
-                args.budget,
-                tok.eos_token_id,
-                tree=args.tree,
-                width=args.width,
-                sampler=sampler,
-            )
-            dt = time.time() - t
-            cat_aggs[m].add(r, dt)
-            ddt = dt - r.prefill_s  # decode-only time (prefill excluded)
-            results[m] = (r, ddt)
-            if m == "baseline":
-                baseline_out[idx] = r.tokens
-                baseline_tps[idx] = len(r.tokens) / ddt if ddt else 0.0
-            elif idx in baseline_out:
-                cat_aggs[m].compare(r.tokens, baseline_out[idx])
-                cat_aggs[m].speedups(ddt, len(r.tokens), baseline_tps[idx])
-            baseline = baseline_out[idx]
-            responses.append(
-                {
-                    "case_id": case_id,
-                    "category": cat,
-                    "metadata": case_metadata,
-                    "method": m,
-                    "tokens": r.tokens,
-                    "text": tok.decode(r.tokens, skip_special_tokens=True),
-                    "baseline_tokens": baseline,
-                    "exact": r.tokens == baseline,
-                    "first_divergence": first_divergence(r.tokens, baseline),
-                    "drafted": r.drafted,
-                    "accepted": r.accepted,
-                    "conditional_attempts": r.conditional_attempts,
-                    "conditional_accepted": r.conditional_accepted,
-                }
-            )
-        logger.info(
-            "[{}] | {}",
-            cat,
-            " | ".join(f"{m}: {len(r.tokens) / ddt:.1f}tok/s" for m, (r, ddt) in results.items()),
-        )
+    prompt_by_id = {case_id: prompt for case_id, _, prompt, _ in prompts}
+    cases = [RunCase(case_id, category, metadata) for case_id, category, _, metadata in prompts]
 
+    def drafter_for(method: str, _: RunCase):
+        if args.reset_drafter_per_prompt:
+            return (
+                Cacheback.from_frozen(args.cacheback_frozen)
+                if method == "cacheback" and args.cacheback_frozen
+                else make_drafter(method, datastore)
+            )
+        return drafters[method]
+
+    aggs, responses, failures = run_cases(
+        cases,
+        methods,
+        model,
+        lambda case, _: tok(prompt_by_id[case.case_id])["input_ids"],
+        drafter_for,
+        lambda tokens: tok.decode(tokens, skip_special_tokens=True),
+        max_new=args.max_new,
+        budget=args.budget,
+        eos=tok.eos_token_id,
+        tree=args.tree,
+        width=args.width,
+        sampler=sampler,
+    )
     scope = f"{args.per_category}/topic" if args.per_category else args.workload
     render_table(
         f"{args.dataset} / {scope} / {args.variant} (n={len(prompts)})",
