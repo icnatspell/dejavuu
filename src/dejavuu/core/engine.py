@@ -17,7 +17,7 @@ import numpy as np
 from loguru import logger
 
 from dejavuu.core import tree as treelib
-from dejavuu.core.sampling import Sampler, pick
+from dejavuu.core.sampling import Sampler
 from dejavuu.core.verifier import Verifier
 from dejavuu.drafters import Drafter, DraftTree
 
@@ -53,21 +53,21 @@ def _warn_no_tree(model_name: str) -> None:
 
 
 def _accept_chain(
-    tree: DraftTree, logits: np.ndarray, sampler: Sampler | None, base_pos: int
+    tree: DraftTree, logits: np.ndarray, sampler: Sampler | None, base_pos: int, top_k: int = 1
 ) -> tuple[list[int], int]:
-    """Descend while the model's prediction (argmax, or a seeded draw under `sampler`)
-    matches a child token. `base_pos` is the anchor's absolute position; the token
-    predicted at depth d lives at base_pos+d+1, which seeds its draw.
+    """Descend via the shared `treelib.pick_child` rule. `base_pos` is the anchor's
+    absolute position; the token predicted at depth d lives at base_pos+d+1, which
+    seeds its draw. `top_k > 1` enables loose (lossy) acceptance -- see `pick_child`.
     Returns (newly emitted tokens incl. bonus, # draft guesses accepted)."""
     emitted: list[int] = []
     node = 0
     while True:
-        pred = pick(logits[node], base_pos + len(emitted) + 1, sampler)
-        child = next((c for c in tree.children(node) if tree.token_ids[c] == pred), None)
+        tok, child = treelib.pick_child(
+            tree, node, logits[node], base_pos + len(emitted) + 1, sampler, top_k
+        )
+        emitted.append(tok)
         if child is None:
-            emitted.append(pred)  # bonus / correction token
             return emitted, len(emitted) - 1
-        emitted.append(pred)
         node = child
 
 
@@ -100,13 +100,20 @@ def generate(
     tree: bool = False,
     width: int = 2,
     sampler: Sampler | None = None,
+    accept_top_k: int = 1,
 ) -> GenResult:
     """Decode against any Verifier (LLM or VLM). drafter=None is the plain
     autoregressive baseline. `tree=True` runs tree verification (branching
     drafts) -- but only if `model.supports_tree`; otherwise it falls back to the
     chain path (the stock 2D-mask exports can't express tree attention). `sampler=None`
     is greedy; a Sampler draws from the target distribution -- still lossless, the
-    output law is the target's regardless of the drafts."""
+    output law is the target's regardless of the drafts.
+
+    `accept_top_k > 1` enables loose (lossy) greedy acceptance: a drafted token is
+    accepted when it is among the target's top-k, trading token identity for a longer
+    accepted length. This deliberately breaks losslessness -- it is opt-in and its
+    quality cost is measured against the greedy baseline (see the response scorers).
+    `accept_top_k == 1` is the exact lossless path and the default."""
     use_tree = tree and model.supports_tree
     if tree and not use_tree and drafter is not None:
         _warn_no_tree(type(model).__name__)
@@ -157,14 +164,14 @@ def generate(
 
         committed_old = committed
         if use_tree:
-            emitted, n_acc, path = treelib.accept(dtree, logits, sampler, committed)
+            emitted, n_acc, path = treelib.accept(dtree, logits, sampler, committed, accept_top_k)
             # Every accepted child was an opportunity. The next position joins the
             # denominator only when the final accepted node has another candidate.
             _record_conditional_acceptance(res, n_acc + int(bool(dtree.children(path[-1]))), n_acc)
             committed += len(path)  # anchor + accepted path nodes
             past = model.gather_kv(present, committed_old, path)
         else:
-            emitted, n_acc = _accept_chain(dtree, logits, sampler, committed)
+            emitted, n_acc = _accept_chain(dtree, logits, sampler, committed, accept_top_k)
             _record_conditional_acceptance(res, min(guesses, n_acc + 1), n_acc)
             path = list(range(n_acc + 1))  # root + accepted guesses (contiguous)
             committed += n_acc + 1  # anchor + accepted guesses; bonus is next anchor

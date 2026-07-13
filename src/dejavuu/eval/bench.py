@@ -67,6 +67,14 @@ def _parser(default_dataset: str | None) -> argparse.ArgumentParser:
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--tree", action="store_true")
     parser.add_argument("--width", type=int, default=2)
+    parser.add_argument(
+        "--accept-top-k",
+        type=int,
+        default=1,
+        help="loose (lossy) acceptance: 1 = exact lossless (default); >1 accepts a "
+        "drafted token in the target's top-k, trading token identity for speed "
+        "(quality cost is measured against the greedy baseline via response scorers)",
+    )
     parser.add_argument("--warmups", type=int, default=1)
     parser.add_argument("--repetitions", type=int, default=1)
     parser.add_argument("--order-seed", type=int, default=0)
@@ -128,6 +136,7 @@ def _run_spec(args: argparse.Namespace) -> RunSpec:
             seed=args.seed,
             tree=args.tree,
             width=args.width,
+            accept_top_k=args.accept_top_k,
         ),
         measurement=MeasurementSpec(
             warmups=args.warmups,
