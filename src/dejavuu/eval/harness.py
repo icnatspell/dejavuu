@@ -91,6 +91,7 @@ class Agg:
     gen_s: float = 0.0
     draft_s: float = 0.0
     verify_s: float = 0.0
+    learn_s: float = 0.0
     prefill_s: float = 0.0
     exact: bool = True  # strict gate (text): any per-prompt mismatch flips it
     cmp_tok: int = 0  # tokens compared vs baseline (non-strict / VLM match %)
@@ -108,6 +109,7 @@ class Agg:
         self.gen_s += dt
         self.draft_s += r.draft_s
         self.verify_s += r.verify_s
+        self.learn_s += r.learn_s
         self.prefill_s += r.prefill_s
         ddt = dt - r.prefill_s  # decode-only wallclock
         st = r.steps or 1
@@ -120,7 +122,8 @@ class Agg:
         s["prefill"].append(r.prefill_s / st * 1e3)
         s["draft"].append(r.draft_s / st * 1e3)
         s["verify"].append(r.verify_s / st * 1e3)
-        s["overhead"].append((ddt - r.draft_s - r.verify_s) / st * 1e3)
+        s["learn"].append(r.learn_s / st * 1e3)
+        s["overhead"].append((ddt - r.draft_s - r.verify_s - r.learn_s) / st * 1e3)
 
     def speedups(self, dt: float, n_tok: int, base_tps: float) -> None:
         """Record this prompt's speedup vs its own baseline (for the per-prompt mean,
@@ -194,6 +197,7 @@ def render_table(
         "prefill ms",
         "draft ms",
         "verify ms",
+        "learn ms",
         "overhead ms",
         last,
     )
@@ -216,9 +220,10 @@ def render_table(
             # speedup(batch) stays the pooled aggregate (no per-prompt distribution);
             # every other numeric column is reported as per-prompt mean ± std.
             speedup = f"{_decode_tps(a) / base_tps:.2f}x" if base_tps else "-"
-            # per-step time split: total = prefill + draft + verify + overhead.
+            # per-step time split: total = prefill + draft + verify + learn + overhead.
             # prefill is one-time (amortized over steps; shrinks with longer output);
-            # draft = index lookup; verify = model forward; overhead = accept/KV remainder.
+            # draft = index lookup; verify = model forward; learn = post-verify drafter
+            # callbacks (observe/update); overhead = accept/KV remainder.
             if m == "baseline":
                 match = "-"
             elif strict:
@@ -236,6 +241,7 @@ def render_table(
                 _fmt(_mstd(s["prefill"]), prec=0),
                 _fmt(_mstd(s["draft"]), prec=0),
                 _fmt(_mstd(s["verify"]), prec=0),
+                _fmt(_mstd(s["learn"]), prec=0),
                 _fmt(_mstd(s["overhead"]), prec=0),
                 match,
                 end_section=mi == len(methods) - 1,
@@ -277,6 +283,8 @@ def render_table(
                         "draft_ms_std",
                         "verify_ms",
                         "verify_ms_std",
+                        "learn_ms",
+                        "learn_ms_std",
                         "overhead_ms",
                         "overhead_ms_std",
                         "match",
@@ -308,6 +316,7 @@ def render_table(
                             *_pair(s["prefill"], 2),
                             *_pair(s["draft"], 2),
                             *_pair(s["verify"], 2),
+                            *_pair(s["learn"], 2),
                             *_pair(s["overhead"], 2),
                             match,
                         ]
