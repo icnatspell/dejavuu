@@ -93,6 +93,15 @@ cached verifier logit, so it deliberately makes no guess.
   stale for a repeated token. The verifier keeps this lossless, but acceptance still has
   to justify the extra tree width.
 
+### N-Gram Trie, in-context continuation tree
+Build a trie from every prompt n-gram and the tokens that followed it. A matching
+suffix retrieves the complete continuation subtree, preserving branches below the
+first next token instead of choosing one continuation immediately.
+- **Benefit:** tree verification can hedge several full in-context futures while
+  sharing their common prefix. It needs no datastore or model side channel.
+- **Drawback:** building the trie is an online-once prompt cost, and its benefit is
+  limited to prompts with repeated n-grams and genuinely branching continuations.
+
 ### REST, retrieval over a static datastore
 Match the current suffix against a persistent datastore (a domain corpus supplied up
 front, and/or completed generations added as the run proceeds) and return the
@@ -208,6 +217,7 @@ one pass with tree attention.
 | Lookahead | prompt/history | longest n-gram | fixed | yes (pool) | no |
 | LogitSpec | prior verifier logits + prompt/history | candidate-conditioned n-gram | fixed | yes | no |
 | Cacheback | bounded online cache | recent leader/follower n-grams | follower-capped | yes | no |
+| N-Gram Trie | prompt | continuation trie | fixed | yes (deep branches) | no |
 | REST | datastore | longest suffix | match-capped | yes | yes |
 | SuffixDecoding | live + history | freq-scored suffix | adaptive (match) | yes | no |
 | SAM-Decoding | datastore + live | longer of the two | match-capped | yes | optional |

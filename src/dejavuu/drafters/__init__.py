@@ -19,6 +19,7 @@ from dejavuu.drafters.cacheback import Cacheback
 from dejavuu.drafters.copyspec import CopySpec
 from dejavuu.drafters.logit_spec import LogitSpec
 from dejavuu.drafters.lookahead import Lookahead
+from dejavuu.drafters.ngram_trie import NGramTrie
 from dejavuu.drafters.pld_plus import PLDPlus
 from dejavuu.drafters.prompt_lookup import PLD
 from dejavuu.drafters.rest import REST
@@ -52,6 +53,9 @@ DRAFTERS: dict[str, DrafterSpec] = {
     "lookahead": DrafterSpec(Lookahead, doc="multi-candidate n-gram pool"),
     "logit_spec": DrafterSpec(
         LogitSpec, doc="verifier-logit candidates extended by n-gram retrieval"
+    ),
+    "ngram_trie": DrafterSpec(
+        NGramTrie, doc="prompt n-gram continuation trie with deep tree branches"
     ),
     "token_recycling": DrafterSpec(TokenRecycling, doc="tree drafts from the verifier's logits"),
     "rest": DrafterSpec(REST, needs_datastore=True, doc="retrieval from a static datastore"),
@@ -110,6 +114,7 @@ __all__ = [
     "DrafterSpec",
     "LogitSpec",
     "Lookahead",
+    "NGramTrie",
     "PLDPlus",
     "SAMDecoding",
     "SuffixDecoding",
