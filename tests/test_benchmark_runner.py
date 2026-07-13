@@ -70,26 +70,37 @@ def test_runner_excludes_preparation_and_balances_against_an_exact_baseline():
 
     result = runner.run(spec, [case], _TextModel())
 
-    assert result.valid
+    assert not result.has_divergences
     assert [m.method for m in result.measurements] == ["baseline", "pld"]
     assert [m.prepare_s for m in result.measurements] == [5.0, 5.0]
     assert [m.generation_s for m in result.measurements] == [2.0, 3.0]
     assert all(m.exact for m in result.measurements)
 
 
-def test_runner_marks_length_variant_speculative_output_invalid():
+def test_divergence_is_recorded_but_never_stops_or_invalidates_the_run():
+    # Divergence between multi-token and incremental decoding is a backend numerical
+    # property, not a failure. It is recorded as a diagnostic; the run stays usable and
+    # keeps measuring every case (AGENTS.md: divergence never invalidates a benchmark).
     spec = RunSpec(
         methods=("pld",),
         decode=DecodeSpec(max_new=6),
         measurement=MeasurementSpec(warmups=0),
     )
-    case = ConversationCase("case-1", "reasoning", (Turn("Question"),))
+    cases = [
+        ConversationCase("case-1", "reasoning", (Turn("Question"),)),
+        ConversationCase("case-2", "reasoning", (Turn("Question"),)),
+    ]
 
-    result = BenchmarkRunner().run(spec, [case], _BrokenModel())
+    result = BenchmarkRunner().run(spec, cases, _BrokenModel())
 
-    assert not result.valid
-    assert result.failures[0]["method"] == "pld"
-    assert result.failures[0]["exact"] is False
+    assert result.has_divergences
+    diverged = [d for d in result.divergences if d["method"] == "pld"]
+    assert diverged
+    assert diverged[0]["exact"] is False
+    assert diverged[0]["first_divergence"] is not None
+    # Every case was measured despite the first case diverging.
+    assert {m.case_id for m in result.measurements} == {"case-1", "case-2"}
+    assert all(m.generation_s > 0 for m in result.measurements if m.method == "pld")
 
 
 def test_cold_model_load_and_preparation_are_separate_from_decode():
@@ -119,6 +130,23 @@ def test_warm_model_load_is_reported_separately_from_every_decode():
     result = BenchmarkRunner().run(spec, [case], _TextModel(), model_load_s=7.5)
 
     assert [m.model_load_s for m in result.measurements] == [7.5, 7.5]
+
+
+def test_diagnostic_run_scores_output_quality_against_the_baseline_text():
+    # When tokens diverge, task quality is judged on the emitted text vs the baseline
+    # text, not token identity. Every response carries reference-based scores.
+    spec = RunSpec(
+        methods=("pld",),
+        decode=DecodeSpec(max_new=6),
+        measurement=MeasurementSpec(warmups=0),
+    )
+    case = ConversationCase("case-1", "reasoning", (Turn("Question"),))
+
+    result = BenchmarkRunner().run(spec, [case], _BrokenModel())
+
+    by_method = {r["method"]: r["scores"] for r in result.responses}
+    assert by_method["baseline"]["text_similarity"] == 1.0  # reference vs itself
+    assert 0.0 <= by_method["pld"]["text_similarity"] <= 1.0
 
 
 def test_requested_tree_verification_fails_instead_of_silently_falling_back():

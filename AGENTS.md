@@ -48,12 +48,15 @@ graphs, may select different tokens for incremental and multi-token execution be
 their kernels use different numerical paths. That does not automatically invalidate a
 performance benchmark or indict a drafter.
 
-- Benchmark exactness is **diagnostic by default**. Record exact-match rate,
-  first-divergence position, and token overlap alongside task-quality metrics, but keep
-  measuring latency, throughput, acceptance, and phase costs after a divergence.
-- Provide an explicit strict/conformance mode when a bit-exact claim is useful. Strict
-  mode may fail the run; ordinary practical benchmarks must not reject an artifact or
-  discard all results solely because generated tokens differ.
+- Benchmark divergence is **always diagnostic, never a failure**. Record exact-match
+  rate, first-divergence position, and token overlap alongside task-quality metrics, but
+  keep measuring latency, throughput, acceptance, and phase costs after a divergence. No
+  benchmark code path may mark a run invalid, reject an artifact, or exit nonzero because
+  generated tokens differ from the baseline.
+- Lossless correctness is enforced only in the model-free conformance suite
+  (`tests/test_conformance.py`), which stays bit-exact to protect the engine's accept/KV
+  invariants. That is the place for a bit-exact claim -- not a mode on the practical
+  benchmark runner.
 - Compare methods against the same model artifact, provider, precision, prompt set,
   decoding policy, and draft budget. Do not compare a quantized method run with an FP32
   baseline and call the difference a drafter regression.

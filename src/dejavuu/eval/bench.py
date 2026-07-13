@@ -244,24 +244,29 @@ def main(default_dataset: str | None = None) -> None:
         list(spec.methods),
         result.aggs,
         log,
-        strict=True,
+        strict=False,  # divergence is diagnostic: show token-match %, never a pass/fail gate
         csv_path=summary,
     )
     car = write_car_profile(summary, result.aggs)
     car.rename(bundle.path("car.csv"))
     bundle.write_responses(result.responses)
-    bundle.write_failures(result.failures)
+    bundle.write_divergences(result.divergences)
     bundle.write_jsonl(
         "measurements.jsonl", [measurement.as_record() for measurement in result.measurements]
     )
-    final = bundle.finalize("valid" if result.valid else "invalid")
+    # Divergence never invalidates a run; it is a recorded diagnostic. The bundle is
+    # always valid -- infra errors would already have raised before reaching here.
+    status = "valid_with_divergences" if result.has_divergences else "valid"
+    final = bundle.finalize(status)
     _copy_legacy(final / "summary.csv", args.csv)
     _copy_legacy(final / "logs/runner.log", args.log)
     _copy_legacy(final / "responses.jsonl", args.responses)
     logger.info("run bundle -> {}", final)
-    if not result.valid:
-        raise RuntimeError(
-            f"{len(result.failures)} speculative outputs diverged; run marked invalid at {final}"
+    if result.has_divergences:
+        logger.info(
+            "{} speculative outputs diverged from baseline; recorded in divergences.jsonl, "
+            "all performance and quality metrics retained",
+            len(result.divergences),
         )
 
 

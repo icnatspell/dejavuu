@@ -7,6 +7,18 @@ All notable changes to this project are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
+- Token divergence from the baseline is recorded as a diagnostic and never fails a
+  benchmark run. The runner writes first-divergence position, exact-match, and overlap
+  to `divergences.jsonl`, marks the bundle `valid_with_divergences`, and keeps measuring
+  latency/throughput/acceptance/phase costs; a `speculative_compatible: false` variant
+  loads with a warning instead of being rejected. Model-free chain/tree conformance
+  (`tests/test_conformance.py`) stays bit-exact and is where lossless correctness is
+  enforced.
+- Reference-based response-quality scorers (`eval/scorers.py`): every response records
+  `scores` against its baseline text so diverging output can still be judged on task
+  quality. Ships a stdlib `text_similarity` (alignment-based) scorer; register more in
+  `SCORERS`.
+
 - Unified benchmark runner with validated run specifications, full-conversation dataset
   adapters, independent text/VLM model adapters, warm/cold memory modes, repetitions,
   cache scopes, balanced method scheduling, and immutable result bundles.

@@ -44,8 +44,8 @@ class RunBundle:
     def write_responses(self, records: list[dict[str, object]]) -> Path:
         return self.write_jsonl("responses.jsonl", records)
 
-    def write_failures(self, records: list[dict[str, object]]) -> Path:
-        return self.write_jsonl("failures.jsonl", records)
+    def write_divergences(self, records: list[dict[str, object]]) -> Path:
+        return self.write_jsonl("divergences.jsonl", records)
 
     def finalize(self, status: str) -> Path:
         if self._finalized:

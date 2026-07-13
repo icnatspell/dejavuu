@@ -29,7 +29,7 @@ Why use it:
 - **Methods are genuinely drop-in:** every registered drafter supports chain and tree
   verification through the same raw-token `DraftTree` contract.
 - **Benchmarks are comparable:** Spec-Bench, SPEED-Bench, and MMSpec share one validated
-  configuration, scheduler, profiler, exactness gate, and output schema.
+  configuration, scheduler, profiler, divergence diagnostics, and output schema.
 - **Runs are reproducible:** datasets and source models are revision-pinned, artifacts
   are SHA-256 verified, provider fallback is explicit, and output bundles are immutable.
 
@@ -116,11 +116,21 @@ such as Qwen use the full `conversation` protocol by default.
 
 ## Results
 
-Benchmark speedups are published only when every speculative output is token-identical
-to the same backend's autoregressive baseline. Earlier SmolVLM measurements based on
-token-match percentages are diagnostic results, not valid lossless speedups, and are no
-longer reported here. The benchmark runner now marks such a run invalid and exits
-nonzero while retaining its failure records for inspection.
+Token divergence is diagnostic, never a failure. When a speculative method's tokens
+differ from the same backend's autoregressive baseline — a quantized graph's multi-token
+forward can pick a different argmax than incremental decoding — that is a backend
+numerical property, not a broken drafter, and it never invalidates a run. The runner
+records every divergence (exact-match, first-divergence position, token overlap) in
+`divergences.jsonl`, marks the bundle `valid_with_divergences`, and keeps measuring
+latency, throughput, acceptance, and phase costs. Each response also carries reference
+`scores` (e.g. `text_similarity`) against its baseline text, so diverging output is still
+judged on task quality rather than token identity. A variant flagged
+`speculative_compatible: false` loads with a warning, not a rejection. Compare methods
+only against the same model artifact, provider, precision, prompt set, and draft budget.
+
+Bit-exactness is still enforced where it protects correctness: the model-free chain/tree
+conformance suite (`tests/test_conformance.py`) asserts every drafter reproduces the
+autoregressive baseline exactly, guarding the verifier's accept/KV invariants.
 
 ## Methods
 
@@ -249,7 +259,8 @@ decoder directory. The tree bench runs every registered drafter against each gra
 exists, always comparing a speculative method with that graph's own baseline.
 The build gate also compares multi-token causal logits with incremental KV-cache
 decoding. A quantized graph that changes next-token choices with sequence length is
-marked incompatible and rejected by strict speculative benchmarks.
+annotated `speculative_compatible: false`; benchmarks load it with a warning and record
+the resulting divergences as diagnostics rather than rejecting it.
 
 ```bash
 ./scripts/build_decoder.sh Qwen/Qwen3-0.6B
@@ -285,12 +296,12 @@ uv run --extra bench python -m dejavuu.eval.bench --dataset mmspec \
 ```
 
 Every run is an immutable directory containing `manifest.json`, `summary.csv`,
-`car.csv`, `measurements.jsonl`, `responses.jsonl`, `failures.jsonl`, and the runner
+`car.csv`, `measurements.jsonl`, `responses.jsonl`, `divergences.jsonl`, and the runner
 log. The manifest pins the model and dataset provenance, execution settings, provider,
-software versions, cost-tier definitions, and validity status. `measurements.jsonl`
-contains phase-level telemetry; generated text and token IDs live in
-`responses.jsonl`; any exactness violation is isolated in `failures.jsonl` and makes
-the command exit nonzero.
+software versions, and cost-tier definitions. `measurements.jsonl` contains phase-level
+telemetry; generated text and token IDs live in `responses.jsonl`; every token
+divergence from the baseline is recorded in `divergences.jsonl`. Divergence never fails
+the run: the command exits zero and the bundle is `valid` (or `valid_with_divergences`).
 
 Results land under a timestamped `results/bench-*` directory. The four knobs are positional,
 `scripts/bench_all.sh <K> <IMG> <THREADS> <TREE>`:
@@ -332,8 +343,10 @@ fails instead of silently changing the requested verification mode.
 decode-only. Model load, prompt/image preparation, KV prefill, and drafter setup are
 reported separately as online-once costs. The hot path partitions into
 `draft + verify + learn + overhead`. Workload dispersion over per-case means and
-within-case repetition variance are separate columns. One strict bit-exact gate guards
-every text and vision method against its own backend baseline.
+within-case repetition variance are separate columns. Each text and vision method is
+compared against its own backend baseline; token divergence is reported as a diagnostic
+and never fails the run. Model-free chain/tree conformance stays bit-exact regardless —
+it guards the verifier's acceptance and KV invariants.
 
 ## Layout
 

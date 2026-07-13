@@ -89,7 +89,7 @@ def test_explicit_model_artifact_is_verified_before_loading(tmp_path):
         )
 
 
-def test_model_artifact_rejects_a_variant_marked_incompatible_with_speculation(tmp_path):
+def _incompatible_artifact(tmp_path):
     (tmp_path / "model.onnx").write_bytes(b"weights")
     write_manifest(
         tmp_path,
@@ -103,10 +103,17 @@ def test_model_artifact_rejects_a_variant_marked_incompatible_with_speculation(t
             },
         },
     )
+    return ModelSpec(path=str(tmp_path), variant="q4")
 
-    with pytest.raises(ValueError, match="sequence-length consistent"):
+
+def test_a_variant_marked_incompatible_with_speculation_loads_past_the_gate(tmp_path):
+    # A `speculative_compatible: false` variant is never rejected: divergence is a
+    # recorded diagnostic, not a validity gate. Loading here still fails on the
+    # fixture's missing tokenizer, and matching that error (not a gate error) proves
+    # the compatibility gate itself let the artifact through.
+    with pytest.raises(ValueError, match="tokenizer"):
         load_benchmark_model(
-            ModelSpec(path=str(tmp_path), variant="q4"),
+            _incompatible_artifact(tmp_path),
             dataset="specbench",
             protocol="first-turn-workload",
         )

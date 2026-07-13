@@ -78,7 +78,7 @@ def test_cli_writes_complete_run_without_individual_output_flags(monkeypatch, tm
     assert manifest["model_artifacts"][0]["source_revision"] == "model-commit"
     assert (out / "summary.csv").exists()
     assert (out / "responses.jsonl").exists()
-    assert (out / "failures.jsonl").exists()
+    assert (out / "divergences.jsonl").exists()
     measurement = json.loads((out / "measurements.jsonl").read_text().splitlines()[0])
     assert measurement["generation_s"] >= measurement["decode_s"]
     assert measurement["tokens_emitted"] == 2

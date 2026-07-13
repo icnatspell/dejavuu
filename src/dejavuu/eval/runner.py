@@ -20,6 +20,7 @@ from dejavuu.eval.config import RunSpec
 from dejavuu.eval.datasets import ConversationCase
 from dejavuu.eval.harness import Agg, first_divergence
 from dejavuu.eval.models import BenchmarkModel, ConversationHistory
+from dejavuu.eval.scorers import score_response
 
 
 @dataclass(frozen=True)
@@ -81,11 +82,14 @@ class RunResult:
     aggs: dict[str, dict[str, Agg]]
     measurements: list[Measurement]
     responses: list[dict[str, object]]
-    failures: list[dict[str, object]]
+    # Positions where a method's tokens differed from the baseline's. Divergence is a
+    # backend numerical property, not a failure: it never invalidates a run. Infra
+    # errors (bad artifact, unsupported tree) raise exceptions instead of landing here.
+    divergences: list[dict[str, object]]
 
     @property
-    def valid(self) -> bool:
-        return not self.failures
+    def has_divergences(self) -> bool:
+        return bool(self.divergences)
 
 
 @dataclass(frozen=True)
@@ -98,7 +102,11 @@ class _Completed:
 
 
 class BenchmarkRunner:
-    """Execute conversations with explicit timing, scheduling, and exactness policy."""
+    """Execute conversations with explicit timing and balanced method scheduling.
+
+    Token divergence from the baseline is recorded as a diagnostic (see
+    ``RunResult.divergences``) and never stops or invalidates a run.
+    """
 
     def __init__(self, clock: Callable[[], float] = time.perf_counter) -> None:
         self.clock = clock
@@ -116,7 +124,7 @@ class BenchmarkRunner:
         aggs: dict[str, dict[str, Agg]] = {}
         measurements: list[Measurement] = []
         responses: list[dict[str, object]] = []
-        failures: list[dict[str, object]] = []
+        divergences: list[dict[str, object]] = []
         construct = drafter_builder or (lambda method: build_drafter(method, datastore))
         run_drafters = {method: construct(method) for method in methods}
         warmed = False
@@ -222,7 +230,6 @@ class BenchmarkRunner:
                     category_aggs = aggs.setdefault(
                         case.category, {method: Agg() for method in methods}
                     )
-                    group_failed = False
                     sample_key = f"{case.case_id}:{turn_index}"
                     for method in methods:
                         completed = group[method]
@@ -254,6 +261,7 @@ class BenchmarkRunner:
                             "baseline_tokens": baseline.tokens,
                             "exact": exact,
                             "first_divergence": first_divergence(result.tokens, baseline.tokens),
+                            "scores": score_response(text, baseline_text),
                             "model_load_s": completed.model_load_s,
                             "prepare_s": completed.prepare_s,
                             "prefill_s": result.prefill_s,
@@ -277,10 +285,7 @@ class BenchmarkRunner:
                             )
                         )
                         if method != "baseline" and not exact:
-                            failures.append(record)
-                            group_failed = True
-                    if group_failed:
-                        break
+                            divergences.append(record)
                     if hasattr(model, "extend_history"):
                         history = model.extend_history(history, turn, baseline_text)
                     else:  # compatibility for lightweight third-party adapters
@@ -293,7 +298,7 @@ class BenchmarkRunner:
         for category_aggs in aggs.values():
             for agg in category_aggs.values():
                 agg.finalize_repetitions()
-        return RunResult(aggs, measurements, responses, failures)
+        return RunResult(aggs, measurements, responses, divergences)
 
 
 def run_cases(

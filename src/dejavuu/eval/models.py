@@ -12,6 +12,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
+from loguru import logger
+
 from dejavuu.core.verifier import Verifier
 from dejavuu.eval.config import ModelSpec
 from dejavuu.eval.datasets import ConversationCase, Turn
@@ -293,7 +295,13 @@ def load_benchmark_model(
     protocol: str,
     image_size: int = 0,
 ) -> BenchmarkModel:
-    """Load a benchmark model independently of dataset selection."""
+    """Load a benchmark model independently of dataset selection.
+
+    A variant flagged `speculative_compatible: false` is loaded with a warning, not
+    rejected: token divergence between multi-token and incremental decoding is a backend
+    numerical property recorded as a diagnostic, never a validity gate (AGENTS.md).
+    Manifest *integrity* problems remain hard failures unless `allow_unverified_artifact`.
+    """
     root = Path(spec.path).expanduser() if spec.path else None
     if root is not None:
         problems = verify_manifest(root)
@@ -303,14 +311,11 @@ def load_benchmark_model(
         if manifest_path.exists():
             provenance = json.loads(manifest_path.read_text()).get("provenance", {})
             variant = provenance.get("variants", {}).get(spec.variant, {})
-            if (
-                isinstance(variant, dict)
-                and variant.get("speculative_compatible") is False
-                and not spec.allow_unverified_artifact
-            ):
-                raise ValueError(
-                    f"model variant {spec.variant!r} is not sequence-length consistent; "
-                    "use a compatible graph or explicitly allow an unverified artifact"
+            if isinstance(variant, dict) and variant.get("speculative_compatible") is False:
+                logger.warning(
+                    "model variant {!r} is not sequence-length consistent; multi-token and "
+                    "incremental decoding may select different tokens (recorded as diagnostics)",
+                    spec.variant,
                 )
     kind = spec.kind
     if kind == "auto":
