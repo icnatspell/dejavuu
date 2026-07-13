@@ -17,6 +17,7 @@ from dejavuu.drafters.asam import ASAM
 from dejavuu.drafters.base import Drafter, DraftTree
 from dejavuu.drafters.cacheback import Cacheback
 from dejavuu.drafters.copyspec import CopySpec
+from dejavuu.drafters.hybrid import Hybrid, PldRecycle, SuffixRecycle
 from dejavuu.drafters.logit_spec import LogitSpec
 from dejavuu.drafters.lookahead import Lookahead
 from dejavuu.drafters.ngram_trie import NGramTrie
@@ -59,6 +60,10 @@ DRAFTERS: dict[str, DrafterSpec] = {
         NGramTrie, doc="prompt n-gram continuation trie with deep tree branches"
     ),
     "token_recycling": DrafterSpec(TokenRecycling, doc="tree drafts from the verifier's logits"),
+    "suffix_recycle": DrafterSpec(
+        SuffixRecycle, doc="suffix index + verifier-logit fallback where retrieval is empty"
+    ),
+    "pld_recycle": DrafterSpec(PldRecycle, doc="PLD + verifier-logit fallback"),
     "rest": DrafterSpec(REST, needs_datastore=True, doc="retrieval from a static datastore"),
     "suffix_decoding": DrafterSpec(SuffixDecoding, doc="online suffix index over run history"),
     "sam_decoding": DrafterSpec(
@@ -115,13 +120,16 @@ __all__ = [
     "DraftTree",
     "Drafter",
     "DrafterSpec",
+    "Hybrid",
     "LogitSpec",
     "Lookahead",
     "NGramTrie",
     "PLDPlus",
+    "PldRecycle",
     "SAMDecoding",
     "SuffixDecoding",
     "SuffixIndex",
+    "SuffixRecycle",
     "TokenRecycling",
     "make_drafter",
     "require_method",
