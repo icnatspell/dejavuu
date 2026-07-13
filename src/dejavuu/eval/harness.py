@@ -30,6 +30,7 @@ __all__ = [
     "Agg",
     "benchmark_metadata",
     "create_run_dir",
+    "first_divergence",
     "load_datastore",
     "make_drafter",
     "render_table",
@@ -37,6 +38,14 @@ __all__ = [
     "write_response_jsonl",
     "write_run_manifest",
 ]
+
+
+def first_divergence(actual: list[int], baseline: list[int]) -> int | None:
+    """Return the first mismatched output position, including a length mismatch."""
+    for index, (got, expected) in enumerate(zip(actual, baseline, strict=False)):
+        if got != expected:
+            return index
+    return None
 
 
 def benchmark_metadata(

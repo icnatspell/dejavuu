@@ -28,6 +28,7 @@ from dejavuu.eval.harness import (
     Agg,
     benchmark_metadata,
     create_run_dir,
+    first_divergence,
     load_datastore,
     make_drafter,
     render_table,
@@ -240,6 +241,13 @@ def main() -> None:
             cat_aggs[m].add(r, dt)
             ddt = dt - r.prefill_s  # decode-only time (prefill excluded)
             results[m] = (r, ddt)
+            if m == "baseline":
+                baseline_out[idx] = r.tokens
+                baseline_tps[idx] = len(r.tokens) / ddt if ddt else 0.0
+            elif idx in baseline_out:
+                cat_aggs[m].compare(r.tokens, baseline_out[idx])
+                cat_aggs[m].speedups(ddt, len(r.tokens), baseline_tps[idx])
+            baseline = baseline_out[idx]
             responses.append(
                 {
                     "case_id": str(idx),
@@ -247,18 +255,15 @@ def main() -> None:
                     "method": m,
                     "tokens": r.tokens,
                     "text": processor.tokenizer.decode(r.tokens, skip_special_tokens=True),
+                    "baseline_tokens": baseline,
+                    "exact": r.tokens == baseline,
+                    "first_divergence": first_divergence(r.tokens, baseline),
                     "drafted": r.drafted,
                     "accepted": r.accepted,
                     "conditional_attempts": r.conditional_attempts,
                     "conditional_accepted": r.conditional_accepted,
                 }
             )
-            if m == "baseline":
-                baseline_out[idx] = r.tokens
-                baseline_tps[idx] = len(r.tokens) / ddt if ddt else 0.0
-            elif idx in baseline_out:
-                cat_aggs[m].compare(r.tokens, baseline_out[idx])
-                cat_aggs[m].speedups(ddt, len(r.tokens), baseline_tps[idx])
         logger.info(
             "prompt {}/{} [{}] | {}",
             idx + 1,
@@ -279,6 +284,10 @@ def main() -> None:
     if args.csv:
         write_car_profile(args.csv, aggs)
         write_response_jsonl(args.responses or args.csv.with_suffix(".responses.jsonl"), responses)
+        failures = [
+            record for record in responses if record["method"] != "baseline" and not record["exact"]
+        ]
+        write_response_jsonl(args.csv.with_suffix(".failures.jsonl"), failures)
         write_run_manifest(
             args.csv,
             benchmark_metadata(
