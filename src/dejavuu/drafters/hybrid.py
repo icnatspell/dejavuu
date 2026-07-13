@@ -12,6 +12,8 @@ a wasted verify slot, never correctness.
 
 from __future__ import annotations
 
+from loguru import logger
+
 from dejavuu.drafters.base import Drafter, DraftTree
 from dejavuu.drafters.prompt_lookup import PLD
 from dejavuu.drafters.suffix_decoding import SuffixDecoding
@@ -49,9 +51,18 @@ class Hybrid(Drafter):
         self.base = base
         self.fallback = fallback
         self.mode = mode
+        # Draft-source attribution: how often retrieval is empty (the exploitable
+        # scenario), and accepted length per source. Answers "how common is the case we
+        # exploit" as a measured base rate instead of a category-average guess.
+        self._src = "base"  # source chosen for the current step
+        self._steps = 0
+        self._empty_steps = 0  # base found nothing -> fallback drove the draft
+        self._emit_base = 0  # tokens emitted on base-fired steps
+        self._emit_empty = 0  # tokens emitted on base-empty steps
 
     def propose(self, ctx: list[int], past_len: int, budget: int) -> DraftTree:
         tree = self.base.propose(ctx, past_len, budget)
+        self._src = "base" if len(tree.token_ids) > 1 else "empty"
         if self.mode == "tail":
             return self._extend_tail(tree, budget)  # linear -> valid on the chain path
         # Sibling branches would get wrong logits with no tree attention, so on the chain
@@ -62,6 +73,7 @@ class Hybrid(Drafter):
 
     def propose_tree(self, ctx: list[int], past_len: int, budget: int, width: int) -> DraftTree:
         tree = self.base.propose_tree(ctx, past_len, budget, width)
+        self._src = "base" if len(tree.token_ids) > 1 else "empty"
         if self.mode == "tail":
             return self._extend_tail(tree, budget)
         guesses = len(tree.token_ids) - 1
@@ -106,6 +118,23 @@ class Hybrid(Drafter):
     def update(self, accepted: list[int]) -> None:
         self.base.update(accepted)
         self.fallback.update(accepted)
+        # Attribute this step's emitted length to its draft source.
+        self._steps += 1
+        if self._src == "empty":
+            self._empty_steps += 1
+            self._emit_empty += len(accepted)
+        else:
+            self._emit_base += len(accepted)
+        if self._steps % 256 == 0:  # periodic base-rate readout in the run log
+            base_steps = self._steps - self._empty_steps
+            logger.info(
+                "hybrid source[{}]: retrieval-empty {:.0%} of steps | mean emit "
+                "base={:.2f} empty-fallback={:.2f}",
+                self.mode,
+                self._empty_steps / self._steps,
+                self._emit_base / base_steps if base_steps else 0.0,
+                self._emit_empty / self._empty_steps if self._empty_steps else 0.0,
+            )
 
     def observe(self, input_tokens: list[int], logits) -> None:
         self.base.observe(input_tokens, logits)
