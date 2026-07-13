@@ -30,7 +30,7 @@ from transformers import (
 from dejavuu.core.engine import generate
 from dejavuu.core.verifier import KVCache, Verifier
 from dejavuu.decoders.vlm import REPO
-from dejavuu.drafters import AdaPLD, PLDPlus, STAND, SuffixDecoding, TokenRecycling
+from dejavuu.drafters import STAND, AdaPLD, PLDPlus, SuffixDecoding, TokenRecycling
 
 
 class TorchTreeDecoder(Verifier):

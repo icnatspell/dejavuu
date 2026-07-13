@@ -346,6 +346,8 @@ def test_copyspec_can_copy_a_continuation_added_during_generation():
     d.reset([0])
     d.update([1, 2, 9, 1, 2])
     assert d.propose([1, 2], 0, budget=2).token_ids == [2, 9, 1]
+
+
 def test_ngram_trie_preserves_branching_continuations_below_a_context_prefix():
     """A trie keeps both complete in-context futures, rather than selecting one
     continuation after the first branch as the suffix-index drafters do."""

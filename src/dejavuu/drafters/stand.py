@@ -44,7 +44,7 @@ class STAND(Drafter):
             # unchanged; argpartition is then the only vocab-wide pass observe pays.
             ex = np.exp(values[top] - values[top[0]])
             probs = ex / ex.sum()
-            candidates = [(int(tok), float(prob)) for tok, prob in zip(top, probs)]
+            candidates = [(int(tok), float(prob)) for tok, prob in zip(top, probs, strict=True)]
             for n in range(1, min(self.order, row + 1) + 1):
                 self.successors[tuple(input_tokens[row - n + 1 : row + 1])] = candidates
 

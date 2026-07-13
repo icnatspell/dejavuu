@@ -35,7 +35,7 @@ class TokenRecycling(Drafter):
         e = np.exp(top_logits - top_logits[:, :1])
         probs = e / e.sum(axis=-1, keepdims=True)
         for tok, row, prow in zip(input_tokens, topk, probs, strict=True):
-            self.successors[tok] = [(int(t), float(p)) for t, p in zip(row, prow)]
+            self.successors[tok] = [(int(t), float(p)) for t, p in zip(row, prow, strict=True)]
 
     def propose(self, ctx: list[int], past_len: int, budget: int) -> DraftTree:
         chain = [ctx[-1]]
