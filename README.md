@@ -120,6 +120,7 @@ VLM. REST, SuffixDecoding, SAM, and ASAM share one reusable token-only `SuffixIn
 | `anpd` | adaptive n-gram draft length |
 | `lookahead` | multi-candidate n-gram pool |
 | `logit_spec` | verifier-logit candidates extended by n-gram retrieval |
+| `ngram_trie` | prompt n-gram continuation trie with deep tree branches |
 | `token_recycling` | tree drafts from the verifier's own logits |
 | `cacheback` | bounded LRU cache of recent leader/follower n-grams |
 | `rest` | retrieval from a static datastore |

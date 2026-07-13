@@ -297,3 +297,42 @@ def test_copyspec_can_copy_a_continuation_added_during_generation():
     d.reset([0])
     d.update([1, 2, 9, 1, 2])
     assert d.propose([1, 2], 0, budget=2).token_ids == [2, 9, 1]
+def test_ngram_trie_preserves_branching_continuations_below_a_context_prefix():
+    """A trie keeps both complete in-context futures, rather than selecting one
+    continuation after the first branch as the suffix-index drafters do."""
+    from dejavuu.drafters import NGramTrie
+
+    d = NGramTrie(prefix=3, continuation=3)
+    prompt = [1, 2, 3, 9, 10, 1, 2, 3, 7, 8, 1, 2, 3]
+    d.reset(prompt)
+
+    tree = d.propose_tree(prompt, 0, budget=6, width=2)
+    children = {tree.token_ids[i]: i for i in tree.children(0)}
+    assert set(children) == {7, 9}
+    assert tree.token_ids[tree.children(children[9])[0]] == 10
+
+
+def test_ngram_trie_allocates_small_tree_budget_across_first_level_branches():
+    """When budget is tight, cover competing next tokens before extending a single
+    continuation deeply; otherwise tree verification cannot hedge the ambiguity."""
+    from dejavuu.drafters import NGramTrie
+
+    d = NGramTrie(prefix=2, continuation=4)
+    prompt = [1, 2, 9, 10, 11, 1, 2, 7, 8, 6, 1, 2]
+    d.reset(prompt)
+    tree = d.propose_tree(prompt, 0, budget=3, width=2)
+    assert {tree.token_ids[i] for i in tree.children(0)} == {7, 9}
+
+
+def test_ngram_trie_spends_small_budget_deepening_a_dominant_continuation():
+    """When one next token dominates the observed continuations, deeper nodes are
+    more valuable than spending the budget on a low-frequency sibling."""
+    from dejavuu.drafters import NGramTrie
+
+    d = NGramTrie(prefix=2, continuation=4)
+    prompt = [1, 2, 9, 10, 11, 1, 2, 9, 10, 11, 1, 2, 9, 10, 11, 1, 2, 7, 8, 6, 1, 2]
+    d.reset(prompt)
+    tree = d.propose_tree(prompt, 0, budget=3, width=2)
+    children = tree.children(0)
+    assert [tree.token_ids[i] for i in children] == [9]
+    assert tree.token_ids[tree.children(children[0])[0]] == 10
