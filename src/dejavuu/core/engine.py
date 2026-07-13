@@ -53,17 +53,23 @@ def _warn_no_tree(model_name: str) -> None:
 
 
 def _accept_chain(
-    tree: DraftTree, logits: np.ndarray, sampler: Sampler | None, base_pos: int, top_k: int = 1
+    tree: DraftTree,
+    logits: np.ndarray,
+    sampler: Sampler | None,
+    base_pos: int,
+    top_k: int = 1,
+    entropy_gate: float = 0.0,
 ) -> tuple[list[int], int]:
     """Descend via the shared `treelib.pick_child` rule. `base_pos` is the anchor's
     absolute position; the token predicted at depth d lives at base_pos+d+1, which
-    seeds its draw. `top_k > 1` enables loose (lossy) acceptance -- see `pick_child`.
+    seeds its draw. `top_k > 1` enables loose (lossy) acceptance, `entropy_gate` gates
+    it -- see `pick_child`.
     Returns (newly emitted tokens incl. bonus, # draft guesses accepted)."""
     emitted: list[int] = []
     node = 0
     while True:
         tok, child = treelib.pick_child(
-            tree, node, logits[node], base_pos + len(emitted) + 1, sampler, top_k
+            tree, node, logits[node], base_pos + len(emitted) + 1, sampler, top_k, entropy_gate
         )
         emitted.append(tok)
         if child is None:
@@ -101,6 +107,7 @@ def generate(
     width: int = 2,
     sampler: Sampler | None = None,
     accept_top_k: int = 1,
+    accept_entropy_gate: float = 0.0,
 ) -> GenResult:
     """Decode against any Verifier (LLM or VLM). drafter=None is the plain
     autoregressive baseline. `tree=True` runs tree verification (branching
@@ -113,7 +120,9 @@ def generate(
     accepted when it is among the target's top-k, trading token identity for a longer
     accepted length. This deliberately breaks losslessness -- it is opt-in and its
     quality cost is measured against the greedy baseline (see the response scorers).
-    `accept_top_k == 1` is the exact lossless path and the default."""
+    `accept_top_k == 1` is the exact lossless path and the default. `accept_entropy_gate`
+    (> 0) restricts loosening to positions where the target's normalized entropy exceeds
+    it -- FLy-style, so confident positions stay exact (see `treelib.pick_child`)."""
     use_tree = tree and model.supports_tree
     if tree and not use_tree and drafter is not None:
         _warn_no_tree(type(model).__name__)
@@ -164,14 +173,18 @@ def generate(
 
         committed_old = committed
         if use_tree:
-            emitted, n_acc, path = treelib.accept(dtree, logits, sampler, committed, accept_top_k)
+            emitted, n_acc, path = treelib.accept(
+                dtree, logits, sampler, committed, accept_top_k, accept_entropy_gate
+            )
             # Every accepted child was an opportunity. The next position joins the
             # denominator only when the final accepted node has another candidate.
             _record_conditional_acceptance(res, n_acc + int(bool(dtree.children(path[-1]))), n_acc)
             committed += len(path)  # anchor + accepted path nodes
             past = model.gather_kv(present, committed_old, path)
         else:
-            emitted, n_acc = _accept_chain(dtree, logits, sampler, committed, accept_top_k)
+            emitted, n_acc = _accept_chain(
+                dtree, logits, sampler, committed, accept_top_k, accept_entropy_gate
+            )
             _record_conditional_acceptance(res, min(guesses, n_acc + 1), n_acc)
             path = list(range(n_acc + 1))  # root + accepted guesses (contiguous)
             committed += n_acc + 1  # anchor + accepted guesses; bonus is next anchor

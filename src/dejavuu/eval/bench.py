@@ -75,6 +75,13 @@ def _parser(default_dataset: str | None) -> argparse.ArgumentParser:
         "drafted token in the target's top-k, trading token identity for speed "
         "(quality cost is measured against the greedy baseline via response scorers)",
     )
+    parser.add_argument(
+        "--accept-entropy-gate",
+        type=float,
+        default=0.0,
+        help="FLy-style gate (0-1, 0=off): only apply --accept-top-k where the target's "
+        "normalized entropy exceeds this, so confident positions stay exact",
+    )
     parser.add_argument("--warmups", type=int, default=1)
     parser.add_argument("--repetitions", type=int, default=1)
     parser.add_argument("--order-seed", type=int, default=0)
@@ -137,6 +144,7 @@ def _run_spec(args: argparse.Namespace) -> RunSpec:
             tree=args.tree,
             width=args.width,
             accept_top_k=args.accept_top_k,
+            accept_entropy_gate=args.accept_entropy_gate,
         ),
         measurement=MeasurementSpec(
             warmups=args.warmups,
