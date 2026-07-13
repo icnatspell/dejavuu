@@ -7,7 +7,7 @@ only when the base is empty, and feed every hook to both sub-drafters. Refs #19.
 """
 
 from dejavuu.drafters.base import Drafter, DraftTree
-from dejavuu.drafters.hybrid import Hybrid
+from dejavuu.drafters.hybrid import Hybrid, _graft
 
 
 class _Empty(Drafter):
@@ -46,6 +46,27 @@ def test_falls_back_to_logit_drafter_only_when_base_is_empty():
     base = _Fixed(7)
     h2 = Hybrid(base, _Fixed(42))
     assert h2.propose([1, 2, 3], 0, 4).token_ids == [3, 7]
+
+
+def test_graft_adds_fallback_branch_on_leftover_budget():
+    # base chain: root 3 -> 7 (1 guess). Fallback chain: root 3 -> 9 -> 8. With budget 4,
+    # graft hangs 9,8 off the root as a second branch (root now has children 7 and 9).
+    base = DraftTree.chain([3, 7])
+    fb = DraftTree.chain([3, 9, 8])
+    merged = _graft(base, fb, budget=4)
+    root_children = {
+        merged.token_ids[c] for c in range(1, len(merged.token_ids)) if merged.parent[c] == 0
+    }
+    assert root_children == {7, 9}
+    assert len(merged.token_ids) - 1 <= 4  # respects budget
+
+
+def test_graft_skips_a_duplicate_first_branch():
+    # Fallback's first token (7) already branches off the root -> don't duplicate it.
+    base = DraftTree.chain([3, 7])
+    fb = DraftTree.chain([3, 7, 8])
+    merged = _graft(base, fb, budget=4)
+    assert merged.token_ids == [3, 7]  # unchanged
 
 
 def test_every_hook_feeds_both_sub_drafters():

@@ -18,15 +18,37 @@ from dejavuu.drafters.suffix_decoding import SuffixDecoding
 from dejavuu.drafters.token_recycling import TokenRecycling
 
 
+def _graft(base_tree: DraftTree, fb: DraftTree, budget: int) -> DraftTree:
+    """Add the fallback's continuation as a new chain hanging off the shared root, using
+    only budget the base left unused. Skips a first token the root already branches into
+    (no duplicate sibling). Returns a valid tree (parents stay topological)."""
+    tokens = list(base_tree.token_ids)
+    parent = list(base_tree.parent)
+    root_children = {tokens[c] for c in range(1, len(tokens)) if parent[c] == 0}
+    prev = 0
+    for i, tok in enumerate(fb.token_ids[1:]):
+        if len(tokens) - 1 >= budget:
+            break
+        if i == 0 and tok in root_children:  # base already covers this branch
+            break
+        tokens.append(tok)
+        parent.append(prev)
+        prev = len(tokens) - 1
+    return DraftTree(tokens, parent)
+
+
 class Hybrid(Drafter):
     """Base retrieval drafter + logit-table fallback. Every engine hook feeds BOTH
     sub-drafters so the fallback's table and the base's index both stay warm."""
 
-    def __init__(self, base: Drafter, fallback: Drafter):
+    def __init__(self, base: Drafter, fallback: Drafter, merge: bool = False):
         self.base = base
         self.fallback = fallback
+        self.merge = merge
 
     def propose(self, ctx: list[int], past_len: int, budget: int) -> DraftTree:
+        # Chain path: sibling branches would get wrong logits (no tree attention), so we
+        # can only *replace* on empty, never merge branches here.
         tree = self.base.propose(ctx, past_len, budget)
         if len(tree.token_ids) > 1:  # base produced a real draft
             return tree
@@ -34,9 +56,15 @@ class Hybrid(Drafter):
 
     def propose_tree(self, ctx: list[int], past_len: int, budget: int, width: int) -> DraftTree:
         tree = self.base.propose_tree(ctx, past_len, budget, width)
-        if len(tree.token_ids) > 1:
+        guesses = len(tree.token_ids) - 1
+        if guesses == 0:  # base empty -> use the fallback outright
+            return self.fallback.propose_tree(ctx, past_len, budget, width)
+        if not self.merge or guesses >= budget:  # base fired and (V1, or no budget left)
             return tree
-        return self.fallback.propose_tree(ctx, past_len, budget, width)
+        # V2: base fired but left budget -> graft the fallback's chain as an extra root
+        # branch. Free on flat verify; the verifier accepts whichever branch is right.
+        fb = self.fallback.propose_tree(ctx, past_len, budget, width)
+        return _graft(tree, fb, budget)
 
     def reset(self, prompt_ids: list[int]) -> None:
         self.base.reset(prompt_ids)
@@ -68,6 +96,14 @@ class SuffixRecycle(Hybrid):
 
     def __init__(self):
         super().__init__(SuffixDecoding(), TokenRecycling())
+
+
+class SuffixRecycleMerge(Hybrid):
+    """suffix_recycle, but grafts the logit fallback onto the tree whenever suffix leaves
+    budget unused (not only when suffix is empty). Free on flat multi-token verify."""
+
+    def __init__(self):
+        super().__init__(SuffixDecoding(), TokenRecycling(), merge=True)
 
 
 class PldRecycle(Hybrid):
