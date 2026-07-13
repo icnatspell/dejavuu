@@ -77,6 +77,10 @@ method, and have the new bucket partition the same decode total (subtract it out
 After improving, re-run the same bench and quote the before/after split, confirming the
 bucket shrank and acceptance/exactness held.
 
+Across a whole sweep, `scripts/gap_rank.py <csv>` ranks methods by speedup and labels
+each one's dominant reducible gap (acceptance / learn / overhead / verify-bound) off the
+same phase split -- that ranked list *is* the "concrete remaining levers" to report.
+
 When *comparing* methods, hold the draft budget -- and hence the drafted/verified token
 count -- equal. The verifier forward is not flat in sequence length (on the ONNX CPU
 path a 1-token and a multi-token step differ by a large fixed jump, then cost roughly
