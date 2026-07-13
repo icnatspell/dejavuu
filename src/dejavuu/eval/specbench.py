@@ -1,50 +1,30 @@
-"""Spec-Bench text harness: baseline vs methods on Gemma (plan 8).
+"""Compatibility helpers for the unified benchmark runner.
 
-    uv run python -m dejavuu.eval.specbench --methods baseline,pld,token_recycling \
-        --workload repetitive --n 20 --max-new 128
-
-Greedy is lossless by construction, so the harness also asserts every method is
-token-identical to the baseline -- a correctness gate, not just a speed table.
+New code should use :mod:`dejavuu.eval.bench` and :mod:`dejavuu.eval.datasets`.
 """
 
 from __future__ import annotations
 
-import argparse
-import json
-import urllib.request
-from collections import Counter
 from pathlib import Path
 
-from loguru import logger
-
-from dejavuu.core import Sampler
-from dejavuu.decoders.text import Model, download
-from dejavuu.drafters import Cacheback
-from dejavuu.eval.datasets import load_speedbench
-from dejavuu.eval.harness import (
-    benchmark_metadata,
-    create_run_dir,
-    load_datastore,
-    make_drafter,
-    render_table,
-    write_car_profile,
-    write_response_jsonl,
-    write_run_manifest,
+from dejavuu.decoders.text import download
+from dejavuu.eval.datasets import (
+    SPEC_WORKLOADS,
+    SPECBENCH_REVISION,
+    load_specbench_cases,
 )
-from dejavuu.eval.runner import RunCase, run_cases
 
+SPEC_BENCH_REVISION = SPECBENCH_REVISION
 SPEC_BENCH_URL = (
-    "https://raw.githubusercontent.com/hemingkx/Spec-Bench/main/data/spec_bench/question.jsonl"
+    f"https://raw.githubusercontent.com/hemingkx/Spec-Bench/{SPEC_BENCH_REVISION}/"
+    "data/spec_bench/question.jsonl"
 )
 CACHE = Path.home() / ".cache" / "dejavuu"
+WORKLOADS = SPEC_WORKLOADS
 
 
 def resolve_model_root(model_path: Path | None, variant: str) -> Path:
-    """Return an explicit built-decoder directory or the bundled model snapshot.
-
-    `variant` remains separate because one decoder directory contains fp32, int8,
-    and q4 graphs. This keeps every quantized run comparable to its own baseline.
-    """
+    """Return an explicit built decoder directory or the bundled text snapshot."""
     if model_path is not None:
         return model_path
     if variant == "fp32":
@@ -52,244 +32,16 @@ def resolve_model_root(model_path: Path | None, variant: str) -> Path:
     return download(variant)
 
 
-# Group Spec-Bench's native categories by topic for reporting. The 8 MT-bench
-# subcategories (the genuinely multi-turn rows) collapse into one topic; note
-# `math` (MT-bench) != `math_reasoning` (GSM8K).
-SPEC_TOPIC = {
-    "summarization": "summarization",
-    "translation": "translation",
-    "qa": "question answering",
-    "math_reasoning": "mathematical reasoning",
-    "rag": "retrieval-augmented generation",
-} | dict.fromkeys(
-    ("writing", "roleplay", "reasoning", "math", "coding", "extraction", "stem", "humanities"),
-    "multi-turn conversation",
-)
-
-# repetitive = output overlaps a long context (where retrieval drafting pays off);
-# diverse = open-ended generation (near-zero speedup expected, plan 7).
-WORKLOADS = {
-    "repetitive": {"summarization", "rag", "qa", "translation"},
-    "diverse": {"writing", "roleplay", "reasoning", "stem", "humanities"},
-    "all": set(SPEC_TOPIC),  # every native category
-}
-
-
 def load_specbench(workload: str, n: int, per_category: int = 0) -> list[tuple[str, str]]:
-    """Return [(topic, prompt), ...], first turn only. `per_category>0` takes K from
-    every *topic* (capped at availability); else first `n` of `workload`. Bucketed by
-    SPEC_TOPIC -- the MT-bench subcategories collapse into multi-turn conversation."""
-    path = CACHE / "spec_bench.jsonl"
-    if not path.exists():
-        CACHE.mkdir(parents=True, exist_ok=True)
-        logger.info("downloading Spec-Bench -> {}", path)
-        urllib.request.urlretrieve(SPEC_BENCH_URL, path)
-    rows = [json.loads(line) for line in path.read_text().splitlines()]
-    if per_category:
-        seen: Counter[str] = Counter()
-        out = []
-        for rec in rows:
-            topic = SPEC_TOPIC.get(rec["category"], rec["category"])
-            if seen[topic] < per_category:
-                out.append((topic, rec["turns"][0]))
-                seen[topic] += 1
-        return out
-    cats = WORKLOADS.get(workload, {workload})
-    return [
-        (SPEC_TOPIC.get(rec["category"], rec["category"]), rec["turns"][0])
-        for rec in rows
-        if rec["category"] in cats
-    ][:n]
+    """Legacy first-turn tuple view over the pinned conversation adapter."""
+    cases = load_specbench_cases(n=n, per_category=per_category, workload=workload)
+    return [(case.category, case.prompt) for case in cases]
 
 
 def main() -> None:
-    p = argparse.ArgumentParser("dejavuu.eval.specbench")
-    p.add_argument("--dataset", choices=["specbench", "speedbench"], default="specbench")
-    p.add_argument("--methods", default="baseline,pld,token_recycling")
-    p.add_argument("--workload", default="repetitive")
-    p.add_argument("--model-path", type=Path, default=None, help="built decoder directory")
-    p.add_argument("--variant", choices=["fp32", "q4", "int8"], default="q4")
-    p.add_argument("--provider", choices=["cpu", "cuda"], default="cpu")
-    p.add_argument("--n", type=int, default=20)
-    p.add_argument(
-        "--per-category",
-        type=int,
-        default=0,
-        help="K per topic (overrides --n/--workload)",
-    )
-    p.add_argument("--max-new", type=int, default=128)
-    p.add_argument("--temperature", type=float, default=0.0)
-    p.add_argument("--top-p", type=float, default=1.0)
-    p.add_argument("--seed", type=int, default=0)
-    p.add_argument("--budget", type=int, default=8)
-    p.add_argument(
-        "--tree",
-        action="store_true",
-        help="tree verify; needs a tree-capable decoder, else falls back to chain",
-    )
-    p.add_argument("--width", type=int, default=2, help="max children/node in tree mode")
-    p.add_argument(
-        "--datastore",
-        type=Path,
-        default=None,
-        help="corpus file (one doc per line) seeding REST / SAM-Decoding's static store",
-    )
-    p.add_argument(
-        "--cacheback-frozen",
-        type=Path,
-        default=None,
-        help="versioned Cacheback table; loaded once before the benchmark (cacheback only)",
-    )
-    p.add_argument(
-        "--reset-drafter-per-prompt",
-        action="store_true",
-        help="construct each drafter before each prompt; use to measure cold caches",
-    )
-    p.add_argument("--log", type=Path, default=None)
-    p.add_argument("--csv", type=Path, default=None)
-    p.add_argument("--responses", type=Path, default=None, help="generated-response JSONL")
-    p.add_argument("--out", type=Path, default=None, help="immutable structured run directory")
-    p.add_argument(
-        "--threads", type=int, default=0, help="ORT intra-op threads per session (0 = ORT default)"
-    )
-    args = p.parse_args()
-    if args.out:
-        if args.csv or args.log or args.responses:
-            p.error(
-                "--out owns summary/log/response paths; do not combine it with --csv/--log/--responses"
-            )
-        create_run_dir(
-            args.out.parent,
-            args.out.name,
-            {
-                "schema_version": 1,
-                "dataset": args.dataset,
-                "decode": {
-                    "budget": args.budget,
-                    "max_new": args.max_new,
-                    "tree": args.tree,
-                    "width": args.width,
-                },
-                "runtime": {"provider": args.provider, "threads": args.threads},
-            },
-        )
-        args.csv = args.out / "summary.csv"
-        args.log = args.out / "logs" / "runner.log"
-        args.responses = args.out / "responses.jsonl"
-    sampler = Sampler(args.temperature, args.top_p, args.seed) if args.temperature > 0 else None
+    from dejavuu.eval.bench import main as unified_main
 
-    if args.log:
-        args.log.parent.mkdir(parents=True, exist_ok=True)
-        logger.add(args.log, mode="a", format="{time:HH:mm:ss} {level} {message}")
-
-    methods = args.methods.split(",")
-    if "baseline" in methods:  # must run first: every method's exactness/speedup is vs it
-        methods = ["baseline", *(m for m in methods if m != "baseline")]
-    model = Model(
-        resolve_model_root(args.model_path, args.variant),
-        args.variant,
-        args.provider,
-        threads=args.threads,
-    )
-    from transformers import AutoTokenizer
-
-    tok = AutoTokenizer.from_pretrained(model.root)
-    if args.dataset == "speedbench":
-        cases = load_speedbench()
-        if args.per_category:
-            seen: Counter[str] = Counter()
-            cases = [
-                c
-                for c in cases
-                if seen[c.category] < args.per_category and not seen.update([c.category])
-            ]
-        else:
-            cases = cases[: args.n]
-        prompts = [(c.case_id, c.category, c.prompt, c.metadata) for c in cases]
-    else:
-        prompts = [
-            (str(i), category, prompt, {})
-            for i, (category, prompt) in enumerate(
-                load_specbench(args.workload, args.n, args.per_category)
-            )
-        ]
-    datastore = load_datastore(args.datastore, tok) if args.datastore else None
-    logger.info(
-        "{} prompts | budget={} max_new={}{}{} | methods={}",
-        len(prompts),
-        args.budget,
-        args.max_new,
-        f" tree(width={args.width})" if args.tree else "",
-        f" datastore={len(datastore)}docs" if datastore else "",
-        methods,
-    )
-
-    # Stateful drafters persist across cases unless the explicit cold-cache switch
-    # rebuilds them through the runner's per-case factory.
-    drafters = {
-        m: (
-            Cacheback.from_frozen(args.cacheback_frozen)
-            if m == "cacheback" and args.cacheback_frozen
-            else make_drafter(m, datastore)
-        )
-        for m in methods
-    }
-    prompt_by_id = {case_id: prompt for case_id, _, prompt, _ in prompts}
-    cases = [RunCase(case_id, category, metadata) for case_id, category, _, metadata in prompts]
-
-    def drafter_for(method: str, _: RunCase):
-        if args.reset_drafter_per_prompt:
-            return (
-                Cacheback.from_frozen(args.cacheback_frozen)
-                if method == "cacheback" and args.cacheback_frozen
-                else make_drafter(method, datastore)
-            )
-        return drafters[method]
-
-    aggs, responses, failures = run_cases(
-        cases,
-        methods,
-        model,
-        lambda case, _: tok(prompt_by_id[case.case_id])["input_ids"],
-        drafter_for,
-        lambda tokens: tok.decode(tokens, skip_special_tokens=True),
-        max_new=args.max_new,
-        budget=args.budget,
-        eos=tok.eos_token_id,
-        tree=args.tree,
-        width=args.width,
-        sampler=sampler,
-    )
-    scope = f"{args.per_category}/topic" if args.per_category else args.workload
-    render_table(
-        f"{args.dataset} / {scope} / {args.variant} (n={len(prompts)})",
-        methods,
-        aggs,
-        args.log,
-        csv_path=args.csv,
-    )
-    if args.csv:
-        write_car_profile(args.csv, aggs)
-        write_response_jsonl(args.responses or args.csv.with_suffix(".responses.jsonl"), responses)
-        failures = [
-            record for record in responses if record["method"] != "baseline" and not record["exact"]
-        ]
-        write_response_jsonl(args.csv.with_suffix(".failures.jsonl"), failures)
-        write_run_manifest(
-            args.csv,
-            benchmark_metadata(
-                dataset=args.dataset,
-                model=f"{model.root}:{args.variant}",
-                provider=args.provider,
-                threads=args.threads,
-                budget=args.budget,
-                tree=args.tree,
-                width=args.width,
-                max_new=args.max_new,
-            ),
-        )
-        if failures:
-            raise RuntimeError(f"{len(failures)} speculative outputs diverged; see failures.jsonl")
+    unified_main("specbench")
 
 
 if __name__ == "__main__":

@@ -5,10 +5,14 @@ import json
 import subprocess
 from pathlib import Path
 
+import pytest
+
+from dejavuu.core.engine import GenResult
 from dejavuu.eval.harness import (
     Agg,
     benchmark_metadata,
     create_run_dir,
+    first_divergence,
     write_car_profile,
     write_response_jsonl,
     write_run_manifest,
@@ -81,6 +85,7 @@ def test_car_profile_is_long_form_by_category_method_and_depth(tmp_path):
             "opportunities": "4",
             "accepted": "3",
             "conditional_acceptance": "0.7500",
+            "cumulative_survival": "0.7500",
         },
         {
             "category": "coding",
@@ -89,6 +94,7 @@ def test_car_profile_is_long_form_by_category_method_and_depth(tmp_path):
             "opportunities": "2",
             "accepted": "1",
             "conditional_acceptance": "0.5000",
+            "cumulative_survival": "0.3750",
         },
     ]
 
@@ -111,3 +117,39 @@ def test_run_directory_is_immutable_and_contains_manifest(tmp_path):
 
     assert run.name == "qwen-speed-tree"
     assert json.loads((run / "manifest.json").read_text()) == {"budget": 8, "dataset": "speedbench"}
+
+
+def test_aggregate_excludes_drafter_setup_from_decode_metrics():
+    """Per-request drafter reset is online-once work, not decode throughput."""
+    agg = Agg()
+    result = GenResult(
+        tokens=[1, 2],
+        steps=1,
+        prefill_s=1.0,
+        draft_setup_s=2.0,
+        draft_s=0.2,
+        verify_s=0.3,
+        learn_s=0.1,
+    )
+
+    agg.add(result, dt=4.0)
+
+    assert agg.draft_setup_s == 2.0
+    assert agg.series["ms_out"] == [500.0]
+    assert agg.series["overhead"] == [pytest.approx(400.0)]
+
+
+def test_first_divergence_reports_a_length_only_mismatch():
+    assert first_divergence([1, 2], [1, 2, 3]) == 2
+
+
+def test_repetition_variance_is_separate_from_workload_variance():
+    agg = Agg()
+    result = GenResult(tokens=[1, 2], steps=1)
+    agg.add(result, dt=2.0, sample_key="case-1")
+    agg.add(result, dt=4.0, sample_key="case-1")
+
+    agg.finalize_repetitions()
+
+    assert agg.series["tps"] == [0.75]
+    assert agg.repeat_std["tps"] == pytest.approx(0.3535533905932738)

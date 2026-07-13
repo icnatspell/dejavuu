@@ -6,6 +6,28 @@ All notable changes to this project are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+- Unified benchmark runner with validated run specifications, full-conversation dataset
+  adapters, independent text/VLM model adapters, warm/cold memory modes, repetitions,
+  cache scopes, balanced method scheduling, and immutable result bundles.
+- Pinned SpecBench, SPEED-Bench, MMSpec, Gemma, and SmolVLM source revisions plus
+  recursive model-artifact integrity manifests and manifest-selected ONNX graph roles.
+- Separate response, failure, and phase-measurement JSONL records, including selected
+  VLM graph and external-decoder provenance in every run bundle.
+
+### Changed
+- Benchmark throughput now excludes model preparation, KV prefill, and per-request
+  drafter setup; all online-once costs are reported separately from the decode hot path.
+- Every benchmark modality now requires bit-exact output against its own autoregressive
+  baseline. Divergent VLM runs are retained as invalid diagnostics, never valid speedups.
+- CUDA provider requests fail when CUDA is unavailable unless fallback is explicit and
+  the actual provider is recorded.
+- Text adapters normalize list, tensor, and mapping tokenizer outputs across supported
+  Transformers versions; externally selected VLM decoders must pass integrity checks.
+- Decoder builds now measure batched-causal versus incremental KV-cache agreement and
+  mark sequence-length-sensitive quantized variants incompatible with strict
+  speculative benchmarks.
+
 ## [0.1.0] - 2026-07-12
 
 First public release of `dejavuu`.

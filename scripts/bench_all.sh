@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Launch both benches on ONE model (SmolVLM2): text Spec-Bench (--dataset specbench)
 # and vision MMSpec (--dataset mmspec), over every method, seeded with the static
-# datastore. Results -> results/{specbench,mmspec}.{csv,log}.
+# datastore. Results -> one immutable run directory per dataset.
 #   ./scripts/bench_all.sh                # 20 prompts/topic, 512px images, chain verify
 #   ./scripts/bench_all.sh 40             # 40 prompts/topic
 #   ./scripts/bench_all.sh 80 512 4       # cap ORT to 4 intra-op threads (CPUExecutionProvider)
@@ -14,7 +14,8 @@ IMG=${2:-512}                    # mmspec: cap longest_edge px (512 = 1 tile, fa
 THREADS=${3:-0}                  # ORT intra-op threads on CPUExecutionProvider (0 = ORT default)
 TREE=${4:-0}                     # 0 = chain verify (default), 1 = tree-based verification
 STORE=data/specbench_corpus.txt
-mkdir -p results
+RUN=${RUN:-"results/bench-$(date -u +%Y%m%d-%H%M%S)"}
+mkdir -p "$RUN"
 
 # tree needs the tree+hidden decoder (tools/build_tree_decoder.py); pld_plus/adapld also
 # need its hidden states -- without it they degrade to plain PLD. See README.
@@ -24,13 +25,17 @@ TREE_FLAG=()
 [ -f "$STORE" ] || uv run python -m dejavuu.tools.build_specbench_corpus --out "$STORE"
 
 # text Spec-Bench on SmolVLM
-uv run --extra vlm python -m dejavuu.eval.mmspec --dataset specbench \
+uv run --extra vlm python -m dejavuu.eval.bench --dataset specbench \
+    --model-kind smolvlm_onnx --protocol first-turn-workload \
     --methods "$METHODS" --per-category "$K" --datastore "$STORE" --threads "$THREADS" \
     "${TREE_FLAG[@]}" \
-    --csv results/specbench.csv --log results/specbench.log
+    --out "$RUN/specbench"
 
 # vision MMSpec on SmolVLM
-uv run --extra vlm python -m dejavuu.eval.mmspec --dataset mmspec \
+uv run --extra vlm python -m dejavuu.eval.bench --dataset mmspec \
+    --protocol first-turn-workload \
     --methods "$METHODS" --per-category "$K" --datastore "$STORE" --threads "$THREADS" \
     --image-size "$IMG" "${TREE_FLAG[@]}" \
-    --csv results/mmspec.csv --log results/mmspec.log
+    --out "$RUN/mmspec"
+
+echo "run bundles: $RUN"

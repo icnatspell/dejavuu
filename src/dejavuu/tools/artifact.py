@@ -18,7 +18,6 @@ from pathlib import Path
 from loguru import logger
 
 MANIFEST = "manifest.json"
-_ARTIFACT_SUFFIXES = (".onnx", ".onnx_data", ".data")
 
 
 def _sha256(p: Path) -> str:
@@ -30,12 +29,15 @@ def _sha256(p: Path) -> str:
 
 
 def _artifacts(d: Path) -> list[Path]:
-    return sorted(p for p in d.iterdir() if p.is_file() and p.name.endswith(_ARTIFACT_SUFFIXES))
+    return sorted(p for p in d.rglob("*") if p.is_file() and p.name != MANIFEST)
 
 
 def write_manifest(d: Path, provenance: dict) -> Path:
     """Stamp manifest.json: sha256 of every artifact in `d` + how it was built."""
-    m = {"provenance": provenance, "files": {p.name: _sha256(p) for p in _artifacts(d)}}
+    m = {
+        "provenance": provenance,
+        "files": {p.relative_to(d).as_posix(): _sha256(p) for p in _artifacts(d)},
+    }
     out = d / MANIFEST
     out.write_text(json.dumps(m, indent=2))
     return out
@@ -55,8 +57,9 @@ def verify_manifest(d: Path) -> list[str]:
         elif _sha256(p) != sha:
             problems.append(f"sha256 mismatch {name}")
     for p in _artifacts(d):  # an artifact the manifest never recorded is also drift
-        if p.name not in want:
-            problems.append(f"untracked {p.name}")
+        name = p.relative_to(d).as_posix()
+        if name not in want:
+            problems.append(f"untracked {name}")
     return problems
 
 

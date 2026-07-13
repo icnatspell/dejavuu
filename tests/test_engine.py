@@ -1,5 +1,8 @@
 """Correctness guards. Loads the real 270m model once (cached after first run)."""
 
+import os
+from pathlib import Path
+
 import numpy as np
 import pytest
 
@@ -47,3 +50,23 @@ def test_rest_is_bit_exact_and_drafts_from_datastore(model: Model):
     spec = generate(model, PROMPT, 30, drafter=rest, budget=8)
     assert base.tokens == spec.tokens
     assert spec.steps < base.steps
+
+
+def test_built_qwen_decoder_is_bit_exact_under_chain_and_tree():
+    """Opt-in smoke for the documented Qwen3 build → benchmark artifact path."""
+    from transformers import AutoTokenizer
+
+    root = Path(
+        os.environ.get(
+            "DEJAVUU_QWEN_DECODER",
+            Path.home() / ".cache" / "dejavuu" / "Qwen-Qwen3-0.6B",
+        )
+    )
+    if not (root / "onnx" / "model_q4.onnx").exists():
+        pytest.skip("build Qwen3 with scripts/build_decoder.sh or set DEJAVUU_QWEN_DECODER")
+    qwen = Model(root, "q4")
+    prompt = AutoTokenizer.from_pretrained(root)("Repeat: red blue red blue")["input_ids"]
+    baseline = generate(qwen, prompt, 16).tokens
+    for tree in (False, True):
+        output = generate(qwen, prompt, 16, drafter=PLD(), tree=tree).tokens
+        assert output == baseline

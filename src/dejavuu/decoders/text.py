@@ -16,6 +16,7 @@ export, and even then the attention read over the KV is irreducible. Not worth i
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from functools import cached_property
 from pathlib import Path
@@ -27,6 +28,7 @@ from dejavuu.core.verifier import KVCache, Verifier
 from dejavuu.decoders.ort import OrtDecoder, make_session
 
 REPO = "onnx-community/gemma-3-270m-ONNX"
+REVISION = "f432e832a60ad22394057c85d45ed5007da3f571"
 ONNX_FILES = {
     "fp32": "onnx/model_fp32.onnx",
     "q4": "onnx/model_q4.onnx",
@@ -39,9 +41,22 @@ def download(variant: str = "q4") -> Path:
     return Path(
         snapshot_download(
             REPO,
+            revision=REVISION,
             allow_patterns=["*.json", "tokenizer*", ONNX_FILES[variant]],
         )
     )
+
+
+def resolve_graph_path(root: Path, variant: str) -> Path:
+    """Resolve a variant by manifest role, with the legacy layout as fallback."""
+    root = Path(root)
+    manifest = root / "manifest.json"
+    if manifest.exists():
+        provenance = json.loads(manifest.read_text()).get("provenance", {})
+        entry = provenance.get("variants", {}).get(variant)
+        if isinstance(entry, dict) and entry.get("file"):
+            return root / entry["file"]
+    return root / ONNX_FILES[variant]
 
 
 @dataclass
@@ -50,11 +65,19 @@ class Model(Verifier):
     variant: str = "q4"
     provider: str = "cpu"
     threads: int = 0
+    allow_provider_fallback: bool = False
 
     @cached_property
     def _dec(self) -> OrtDecoder:
-        path = Path(self.root) / ONNX_FILES[self.variant]
-        return OrtDecoder(make_session(path, self.provider, self.threads))
+        path = resolve_graph_path(self.root, self.variant)
+        return OrtDecoder(
+            make_session(
+                path,
+                self.provider,
+                self.threads,
+                allow_provider_fallback=self.allow_provider_fallback,
+            )
+        )
 
     @property
     def supports_tree(self) -> bool:

@@ -26,10 +26,12 @@ import tempfile
 from pathlib import Path
 
 import torch
+from huggingface_hub import HfApi
 from loguru import logger
 from transformers import AutoModelForCausalLM, AutoModelForImageTextToText, AutoTokenizer
 
-from dejavuu.decoders.vlm import GENAI_DECODER, REPO
+from dejavuu.decoders.vlm import GENAI_DECODER, REPO, REVISION
+from dejavuu.tools.artifact import write_manifest
 
 # Where the text tower hangs off a multimodal checkpoint. Layout is architecture-
 # specific, so probe the common paths; first match wins.
@@ -62,6 +64,7 @@ def _text_backbone(vlm: torch.nn.Module) -> torch.nn.Module:
 def main() -> None:
     p = argparse.ArgumentParser("dejavuu.tools.build_vlm_decoder")
     p.add_argument("--repo", default=REPO, help="HF VLM checkpoint (default: SmolVLM2)")
+    p.add_argument("--revision", default=None, help="HF commit; default resolves current commit")
     p.add_argument(
         "--out",
         type=Path,
@@ -71,11 +74,16 @@ def main() -> None:
     p.add_argument("--precision", default="int4", help="genai builder precision")
     p.add_argument("--device", default="cpu", help="genai builder exec provider")
     args = p.parse_args()
+    revision = args.revision or (
+        REVISION if args.repo == REPO else HfApi().model_info(args.repo).sha
+    )
 
     with tempfile.TemporaryDirectory() as tmp:
         ckpt, built = Path(tmp) / "text", Path(tmp) / "onnx"
 
-        vlm = AutoModelForImageTextToText.from_pretrained(args.repo, dtype=torch.float32)
+        vlm = AutoModelForImageTextToText.from_pretrained(
+            args.repo, revision=revision, dtype=torch.float32
+        )
         text = _text_backbone(vlm)
         # Rebuild the text tower as a standalone causal LM: get_text_config picks the
         # right architecture (not just Llama) and from_config builds the matching
@@ -96,7 +104,7 @@ def main() -> None:
         # Drop the source (fast) tokenizer into the input dir so the genai builder
         # reuses tokenizer.json instead of a slow->fast convert (which needs
         # sentencepiece/tiktoken and otherwise fails the build at the config step).
-        AutoTokenizer.from_pretrained(args.repo).save_pretrained(ckpt)
+        AutoTokenizer.from_pretrained(args.repo, revision=revision).save_pretrained(ckpt)
 
         subprocess.run(
             [
@@ -122,6 +130,16 @@ def main() -> None:
         args.out.parent.mkdir(parents=True, exist_ok=True)
         for f in ("model.onnx", "model.onnx.data"):
             shutil.copy(built / f, args.out.parent / f)
+    write_manifest(
+        args.out.parent,
+        {
+            "model_kind": "vlm_text_decoder",
+            "source_model": args.repo,
+            "source_revision": revision,
+            "precision": args.precision,
+            "device": args.device,
+        },
+    )
     logger.info("decoder -> {}", args.out)
 
 

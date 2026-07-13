@@ -32,6 +32,7 @@ class GenResult:
     verify_s: float = 0.0  # cumulative time in model.forward
     learn_s: float = 0.0  # cumulative time in the post-verify drafter callbacks
     prefill_s: float = 0.0  # one-time prompt prefill (kept out of per-step overhead)
+    draft_setup_s: float = 0.0  # per-request drafter reset (online once, not decode)
     root_proposals: int = 0
     root_top1: int = 0
     root_top5: int = 0
@@ -113,10 +114,13 @@ def generate(
     t0 = time.perf_counter()
     past, committed = model.prefill(seq)  # prompt[-1] stays as the first anchor
     prefill_s = time.perf_counter() - t0
+    draft_setup_s = 0.0
     if drafter is not None:
+        t0 = time.perf_counter()
         drafter.reset(seq)  # rotate per-request state for stateful drafters
+        draft_setup_s = time.perf_counter() - t0
 
-    res = GenResult(tokens=[], prefill_s=prefill_s)
+    res = GenResult(tokens=[], prefill_s=prefill_s, draft_setup_s=draft_setup_s)
     while len(res.tokens) < max_new:
         if drafter is None:
             dtree = DraftTree.chain([seq[-1]])
@@ -214,8 +218,10 @@ def generate_seeded(
     t0 = time.perf_counter()
     past, committed, root_logits = model.prefill_seeded(seq)
     prefill_s = time.perf_counter() - t0
+    t0 = time.perf_counter()
     drafter.reset(seq)
-    res = GenResult(tokens=[], prefill_s=prefill_s)
+    draft_setup_s = time.perf_counter() - t0
+    res = GenResult(tokens=[], prefill_s=prefill_s, draft_setup_s=draft_setup_s)
     root = int(root_logits.argmax())
     seq.append(root)  # known target output, still uncommitted in the KV
     # LogitSpec's observation hook can use the prefill distribution to construct

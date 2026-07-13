@@ -25,7 +25,7 @@ from loguru import logger
 from torch import nn
 from transformers import DynamicCache, LlamaForCausalLM
 
-from dejavuu.decoders.vlm import REPO, VLM_TREE_DECODER
+from dejavuu.decoders.vlm import REPO, REVISION, VLM_TREE_DECODER
 from dejavuu.tools.artifact import write_manifest
 
 # reuse the backbone extraction the tree harness already uses
@@ -130,7 +130,9 @@ def _quantize(out: Path, prim_name: str) -> None:
     manifest = write_manifest(
         out.parent,
         {
+            "model_kind": "smolvlm_decoder" if prim_name == "inputs_embeds" else "text_decoder",
             "source_repo": REPO,
+            "source_revision": REVISION,
             "backbone": "LlamaForCausalLM (SmolVLM2 text_model)",
             "primary_input": prim_name,
             "hidden_states_layer": HIDDEN_LAYER,

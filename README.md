@@ -1,7 +1,8 @@
 # dejavuu
 
-Training-free speculative decoding for [ONNX Runtime](https://onnxruntime.ai/) and
-Hugging Face PyTorch models.
+Training-free, lossless speculative decoding for
+[ONNX Runtime](https://onnxruntime.ai/) and Hugging Face PyTorch models—with one
+benchmarking workflow for text LLMs and vision-language models.
 
 [![CI](https://github.com/icnatspell/dejavuu/actions/workflows/ci.yml/badge.svg)](https://github.com/icnatspell/dejavuu/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/icnatspell/dejavuu/blob/main/LICENSE)
@@ -12,17 +13,25 @@ forward pass. The target model's accept rule keeps only the tokens it would have
 produced anyway, so a wrong guess wastes one pass and never changes the output. The
 speedup comes from replacing many single-token passes with fewer multi-token ones.
 
-`dejavuu` is model-free in the drafting sense: it drops the small auxiliary draft model
-that speculative decoding usually needs. Its drafters copy their guesses straight from
-text the target model has already seen—the prompt, the generation so far, or a fixed
-corpus. A guess is an index lookup, not a second network. Every drafter works on raw
-token ids, so one instance drives both a text LLM and a vision-language model through
-the same verifier.
+`dejavuu` is model-free in the drafting sense: it removes the small auxiliary draft
+model that speculative decoding usually needs. Its drafters copy guesses from text the
+target has already seen—the prompt, the generation so far, or a fixed corpus. A guess
+is an index lookup, not a second network. Every drafter works on raw token IDs, so the
+same method drives a text LLM or vision-language model through one verifier interface.
 
-- No draft model to load, train, or keep in memory.
-- Strictly lossless on the text path, checked bit-for-bit in CI.
-- One model spans both modalities: SmolVLM2 runs the text and the vision benchmark.
-- Chain and tree verification both work for every method.
+Why use it:
+
+- **No draft-model tax:** nothing extra to train, load, or keep in accelerator memory.
+- **Losslessness is enforced:** every speculative response is compared token-for-token
+  with the same backend's autoregressive baseline, for text and vision.
+- **Backends are interchangeable:** use a local ONNX graph or any Hugging Face causal
+  LM; drafters never depend on model internals.
+- **Methods are genuinely drop-in:** every registered drafter supports chain and tree
+  verification through the same raw-token `DraftTree` contract.
+- **Benchmarks are comparable:** Spec-Bench, SPEED-Bench, and MMSpec share one validated
+  configuration, scheduler, profiler, exactness gate, and output schema.
+- **Runs are reproducible:** datasets and source models are revision-pinned, artifacts
+  are SHA-256 verified, provider fallback is explicit, and output bundles are immutable.
 
 [docs/methods.md](docs/methods.md) explains how the drafters differ and when each one wins.
 
@@ -82,28 +91,36 @@ dejavuu "def add(a, b):\n    return a + b\n\ndef sub(a, b):\n    return" --metho
 `--temperature`, `--top-p`, or `--seed` to switch from greedy to sampling. To hack on
 the repo instead of installing, use `uv sync` and prefix commands with `uv run`.
 
+### Benchmark in two minutes
+
+The smallest end-to-end run downloads a pinned ONNX model and one pinned Spec-Bench
+case, compares PLD with its baseline, and writes a self-contained result bundle:
+
+```bash
+git clone https://github.com/icnatspell/dejavuu.git
+cd dejavuu
+uv sync --extra bench
+
+uv run python -m dejavuu.eval.bench \
+    --dataset specbench --protocol first-turn-workload \
+    --methods baseline,pld --n 1 --max-new 16 \
+    --warmups 0 --out results/quickstart
+```
+
+Open `results/quickstart/summary.csv` for the comparison and
+`results/quickstart/manifest.json` for the exact model, dataset, provider, software,
+and measurement configuration. Output directories are immutable; choose a new
+`--out` path for each run. The quick start uses `first-turn-workload` because the
+small default Gemma model is a base model without a chat template; instruct models
+such as Qwen use the full `conversation` protocol by default.
+
 ## Results
 
-SmolVLM2 (int4) on Spec-Bench, 480 prompts, CPU. Speedup is decode-only throughput
-over the plain autoregressive baseline. Retrieval pays off most where the output
-repeats the input, so the best method varies by task:
-
-| task | best method | speedup | token match |
-|---|---|---:|---:|
-| retrieval-augmented generation | `suffix_decoding` | 1.66x | 79% |
-| multi-turn conversation | `sam_decoding` | 1.32x | 55% |
-| summarization | `asam` | 1.31x | 73% |
-| mathematical reasoning | `anpd` | 1.29x | 49% |
-| question answering | `anpd` | 1.15x | 48% |
-| translation | `anpd` | 2.00x | 27% |
-
-The strongest methods average about 1.2x across the six tasks. The clean wins are RAG
-and summarization, where the drafted output tracks the baseline closely. Translation
-and QA decode faster but diverge more, because the quantized SmolVLM decoder is not
-length-invariant: its speculative output is *near*-lossless (a token-match percentage
-against the baseline), not bit-exact. The Gemma text path stays strictly lossless, and
-the bit-exactness unit tests guard it. Reproduce these numbers in
-[Reproduce the benchmark](#reproduce-the-benchmark).
+Benchmark speedups are published only when every speculative output is token-identical
+to the same backend's autoregressive baseline. Earlier SmolVLM measurements based on
+token-match percentages are diagnostic results, not valid lossless speedups, and are no
+longer reported here. The benchmark runner now marks such a run invalid and exits
+nonzero while retaining its failure records for inspection.
 
 ## Methods
 
@@ -122,6 +139,7 @@ VLM. REST, SuffixDecoding, SAM, and ASAM share one reusable token-only `SuffixIn
 | `logit_spec` | verifier-logit candidates extended by n-gram retrieval |
 | `ngram_trie` | prompt n-gram continuation trie with deep tree branches |
 | `token_recycling` | tree drafts from the verifier's own logits |
+| `stand` | probability-ranked n-gram trees learned from verifier logits |
 | `cacheback` | bounded LRU cache of recent leader/follower n-grams |
 | `rest` | retrieval from a static datastore |
 | `suffix_decoding` | online suffix index over global and per-request history |
@@ -169,6 +187,23 @@ backends and both text and vision.
 
 ## Reproduce the benchmark
 
+### Benchmark compatibility
+
+| workload | accepted model adapter | default protocol | what this runner reports |
+|---|---|---|---|
+| Spec-Bench | text ONNX or SmolVLM | full conversation | quality, exactness, and single-request decode performance |
+| SPEED-Bench `qualitative` | text ONNX | full conversation | semantically diverse quality and single-request performance |
+| SPEED-Bench `throughput_*` | text ONNX | first-turn workload only | controlled long-context single-request measurements |
+| MMSpec | SmolVLM | full conversation with images | multimodal quality, exactness, and decode performance |
+
+NVIDIA's **official** SPEED-Bench throughput protocol measures concurrent serving on
+vLLM, SGLang, or TensorRT-LLM. This ONNX Runtime runner rejects
+`--protocol official` for throughput splits instead of presenting single-request
+numbers as server throughput. See the
+[SPEED-Bench dataset](https://huggingface.co/datasets/nvidia/SPEED-Bench) and
+[official measurement framework](https://github.com/NVIDIA/Model-Optimizer/tree/main/examples/specdec_bench)
+for that serving experiment.
+
 A fresh clone reaches the full numbers in a few steps. Both benchmarks run the one
 SmolVLM2 model, text Spec-Bench and vision MMSpec, so the results compare across
 datasets.
@@ -200,7 +235,6 @@ uv run python -m dejavuu.tools.build_specbench_corpus   # -> data/specbench_corp
 ./scripts/bench_all.sh 1 512
 
 # 6. full run: all samples/topic, detached so it survives your shell
-rm -f results/specbench.* results/mmspec.*
 nohup ./scripts/bench_all.sh 80 512 > results/run.out 2>&1 &
 tail -f results/run.out
 
@@ -213,6 +247,9 @@ To build a tree-capable text decoder for another conventional causal language mo
 builder writes `fp32`, `int8`, and mixed-body `q4` graphs plus the tokenizer into one
 decoder directory. The tree bench runs every registered drafter against each graph that
 exists, always comparing a speculative method with that graph's own baseline.
+The build gate also compares multi-token causal logits with incremental KV-cache
+decoding. A quantized graph that changes next-token choices with sequence length is
+marked incompatible and rejected by strict speculative benchmarks.
 
 ```bash
 ./scripts/build_decoder.sh Qwen/Qwen3-0.6B
@@ -226,27 +263,36 @@ Gemma snapshot still supplies the legacy `q4` and `int8` defaults.
 ```bash
 uv run python -m dejavuu.eval.specbench \
     --model-path ~/.cache/dejavuu/Qwen-Qwen3-0.6B --variant fp32 \
-    --methods baseline,pld,pld_plus,adapld --per-category 20 --tree --width 2
+    --methods baseline,pld,pld_plus,adapld --per-category 20 --tree --width 2 \
+    --out results/qwen-specbench
 ```
 
 Use the unified selector for benchmark datasets. `speedbench` defaults to NVIDIA's
 diverse qualitative split; its throughput-named splits are context-length workloads in
 this single-request ONNX Runtime harness, not batched-server throughput claims.
+The default `conversation` protocol preserves every turn and applies the model chat
+template. Use `--protocol first-turn-workload` only to compare with older first-turn
+runs; `--protocol official` rejects a throughput split when the runner cannot satisfy
+its batched-serving requirements.
 
 ```bash
 uv run --extra bench python -m dejavuu.eval.bench --dataset speedbench \
     --model-path ~/.cache/dejavuu/Qwen-Qwen3-0.6B --variant q4 --per-category 20 \
-    --threads 4 --budget 8 --tree --width 2 --csv results/qwen_speed.csv
+    --threads 4 --budget 8 --tree --width 2 --out results/qwen-speed
 uv run --extra bench python -m dejavuu.eval.bench --dataset mmspec \
-    --per-category 10 --threads 4 --budget 8 --tree --width 2 --csv results/smol_mmspec.csv
+    --per-category 10 --threads 4 --budget 8 --tree --width 2 \
+    --out results/smol-mmspec
 ```
 
-Every CSV run also writes `*.car.csv`, the conditional acceptance rate at each reached
-draft position, and `*.responses.jsonl`, one decoded response and its token/acceptance
-telemetry per case and method. These sidecars make a poor aggregate result inspectable
-without rerunning it.
+Every run is an immutable directory containing `manifest.json`, `summary.csv`,
+`car.csv`, `measurements.jsonl`, `responses.jsonl`, `failures.jsonl`, and the runner
+log. The manifest pins the model and dataset provenance, execution settings, provider,
+software versions, cost-tier definitions, and validity status. `measurements.jsonl`
+contains phase-level telemetry; generated text and token IDs live in
+`responses.jsonl`; any exactness violation is isolated in `failures.jsonl` and makes
+the command exit nonzero.
 
-Results land in `results/{specbench,mmspec}.{csv,log}`. The four knobs are positional,
+Results land under a timestamped `results/bench-*` directory. The four knobs are positional,
 `scripts/bench_all.sh <K> <IMG> <THREADS> <TREE>`:
 
 - `K` is prompts per topic (80 covers all of Spec-Bench; MMSpec saturates at 10 or more).
@@ -263,29 +309,31 @@ Results land in `results/{specbench,mmspec}.{csv,log}`. The four knobs are posit
 ./scripts/bench_all.sh 80 256 4 0        # same but chain (the with/without-tree pair)
 ```
 
-To call a bench directly (both datasets go through the one SmolVLM harness), drop
-`--tree` for chain, and set `--width` for max children per node under a tree:
+Dataset and model selection are independent. To run both datasets through SmolVLM,
+select its adapter explicitly for text Spec-Bench; drop `--tree` for chain:
 
 ```bash
-uv run --extra vlm python -m dejavuu.eval.mmspec --dataset specbench \
-    --methods baseline,pld,pld_plus,adapld --per-category 80 --threads 4          # chain
-uv run --extra vlm python -m dejavuu.eval.mmspec --dataset mmspec \
+uv run --extra vlm python -m dejavuu.eval.bench --dataset specbench \
+    --model-kind smolvlm_onnx --methods baseline,pld,pld_plus,adapld \
+    --per-category 80 --threads 4 --out results/smol-specbench                   # chain
+uv run --extra vlm python -m dejavuu.eval.bench --dataset mmspec \
     --methods baseline,pld,pld_plus,adapld --per-category 80 \
-    --image-size 256 --threads 4 --tree --width 2                                 # tree
+    --image-size 256 --threads 4 --tree --width 2 --out results/smol-mmspec      # tree
 ```
 
 `--provider cpu` selects `CPUExecutionProvider`, and `--threads N` sets its
-`intra_op_num_threads`. `--tree` needs the tree+hidden decoder from step 3, and warns
-and falls back to chain without it.
+`intra_op_num_threads`. `--provider cuda` fails when CUDA is unavailable unless
+`--allow-provider-fallback` is explicit. `--tree` requires a tree-capable decoder and
+fails instead of silently changing the requested verification mode.
 
 ## How results are reported
 
-`eval/harness.py` renders a per-topic table and CSV. `tok/s` and the speedups are
-decode-only, since prefill is a one-time prompt tax that has nothing to do with
-speculative decoding and would dilute the decode-loop speedup (the table reports it in
-its own column). Every per-prompt column is `mean ± std`, and the per-step time splits
-as `total = prefill + draft + verify + overhead`. A strict exactness gate, or a
-token-match percentage for the VLM, guards every method against its baseline.
+`eval/harness.py` renders a per-topic table and CSV. `tok/s` and speedups are hot-path
+decode-only. Model load, prompt/image preparation, KV prefill, and drafter setup are
+reported separately as online-once costs. The hot path partitions into
+`draft + verify + learn + overhead`. Workload dispersion over per-case means and
+within-case repetition variance are separate columns. One strict bit-exact gate guards
+every text and vision method against its own backend baseline.
 
 ## Layout
 
@@ -297,7 +345,7 @@ dejavuu/
                     tree, sampling
   decoders/         Verifier implementations: ort, text (Model), vlm (VLM)
   drafters/         the method zoo (base, suffix_index, one file per method)
-  eval/             benchmark harnesses: harness (shared), specbench, mmspec
+  eval/             unified config, dataset/model adapters, runner, metrics, run bundles
   tools/            build_tree_decoder (tree+hidden, quantized), build_vlm_decoder,
                     build_specbench_corpus, specbench_entropy, eval_tree
 scripts/bench_all.sh  one-command specbench + mmspec sweep over all methods

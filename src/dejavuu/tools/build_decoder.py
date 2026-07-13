@@ -40,6 +40,7 @@ from pathlib import Path
 import numpy as np
 import torch
 import transformers
+from huggingface_hub import HfApi
 from loguru import logger
 from torch import nn
 from transformers import AutoModelForCausalLM, AutoTokenizer, DynamicCache
@@ -63,6 +64,8 @@ class Variant:
     name: str  # fp32 / int8 / q4
     path: Path
     fidelity: float | None = None  # top-1 agreement vs torch fp32 over the probe
+    sequence_length_agreement: float | None = None
+    speculative_compatible: bool | None = None
 
 
 class _Wrapper(nn.Module):
@@ -100,11 +103,14 @@ class _Wrapper(nn.Module):
         return (out.logits, out.hidden_states[HIDDEN_LAYER], *present)
 
 
-def load_lm(model_id: str) -> nn.Module:
+def load_lm(model_id: str, revision: str) -> nn.Module:
     """Load a conventional causal LM with eager attention (required so the exported
     graph consumes our 4D additive mask directly rather than rebuilding a causal one)."""
     lm = AutoModelForCausalLM.from_pretrained(
-        model_id, dtype=torch.float32, attn_implementation="eager"
+        model_id,
+        revision=revision,
+        dtype=torch.float32,
+        attn_implementation="eager",
     )
     lm.config._attn_implementation = "eager"
     return lm.eval()
@@ -232,6 +238,23 @@ def _next_token_argmax_onnx(path: Path, ids: list[int], threads: int) -> list[in
     return [int(row.argmax()) for row in np.asarray(logits)]
 
 
+def _incremental_argmax_onnx(path: Path, ids: list[int], threads: int) -> list[int]:
+    """Next-token argmax for each position using one-token KV-cache forwards.
+
+    Speculative verification submits several tokens at once. Those batched causal
+    logits must select the same tokens as incremental decoding from the same graph;
+    some aggressive quantizations violate that invariant even when both executions
+    are individually well-formed.
+    """
+    dec = OrtDecoder(make_session(path, "cpu", threads))
+    past = dec.empty_kv()
+    predictions: list[int] = []
+    for position, token_id in enumerate(ids):
+        logits, past, _ = dec.run([token_id], past, position)
+        predictions.append(int(np.asarray(logits)[-1].argmax()))
+    return predictions
+
+
 def _next_token_argmax_torch(lm: nn.Module, ids: list[int]) -> list[int]:
     with torch.no_grad():
         out = lm(torch.tensor([ids]))
@@ -255,19 +278,32 @@ def validate(
     seq = [*prompt_ids, *_greedy_torch(lm, prompt_ids, n_new)]  # score over fp32's own path
     ref = _next_token_argmax_torch(lm, seq)
     got = _next_token_argmax_onnx(variant.path, seq, threads)
+    incremental = _incremental_argmax_onnx(variant.path, seq, threads)
     start = len(prompt_ids) - 1  # first position whose prediction is a generated token
     pairs = list(zip(ref[start:-1], got[start:-1], strict=False))
     agree = float(np.mean([a == b for a, b in pairs])) if pairs else 0.0
     variant.fidelity = agree
+    consistency = float(np.mean(np.asarray(got) == np.asarray(incremental)))
+    variant.sequence_length_agreement = consistency
+    variant.speculative_compatible = consistency == 1.0
 
     free_run = _greedy_onnx(variant.path, prompt_ids, n_new, threads)
     text = tok.decode(free_run, skip_special_tokens=True).replace("\n", " ")
     logger.info(
-        "[{}] teacher-forced top-1 vs fp32: {:.0%}  |  free-run: {!r}",
+        "[{}] top-1 vs fp32: {:.0%}  |  batched-vs-incremental: {:.0%}  |  free-run: {!r}",
         variant.name,
         agree,
+        consistency,
         text[:70],
     )
+    if not variant.speculative_compatible:
+        message = (
+            f"{variant.name} batched causal predictions agree with incremental decoding "
+            f"at only {consistency:.0%} of probe positions"
+        )
+        if variant.name == "fp32":
+            raise RuntimeError(f"broken export: {message}")
+        logger.warning("{} -- artifact will be blocked for strict speculative runs", message)
     floor = FIDELITY_FLOOR[variant.name]
     if agree < floor:
         msg = f"{variant.name} teacher-forced fidelity {agree:.0%} < floor {floor:.0%}"
@@ -279,6 +315,7 @@ def validate(
 def main() -> None:
     ap = argparse.ArgumentParser("dejavuu.tools.build_decoder")
     ap.add_argument("--model", required=True, help="HF model id, e.g. Qwen/Qwen3-0.6B")
+    ap.add_argument("--revision", default=None, help="HF commit; default resolves current commit")
     ap.add_argument("--out", type=Path, required=True, help="output dir; ONNX lands in <out>/onnx/")
     ap.add_argument("--quant", choices=["int8", "q4", "both", "none"], default="both")
     ap.add_argument("--no-validate", action="store_true", help="skip the generation fidelity gate")
@@ -292,9 +329,10 @@ def main() -> None:
     args = ap.parse_args()
 
     onnx_dir = args.out / "onnx"
-    logger.info("loading {} (eager attention)", args.model)
-    lm = load_lm(args.model)
-    tok = AutoTokenizer.from_pretrained(args.model)
+    revision = args.revision or HfApi().model_info(args.model).sha
+    logger.info("loading {}@{} (eager attention)", args.model, revision)
+    lm = load_lm(args.model, revision)
+    tok = AutoTokenizer.from_pretrained(args.model, revision=revision)
 
     fp32 = onnx_dir / "model_fp32.onnx"
     export_fp32(lm, fp32)
@@ -316,14 +354,22 @@ def main() -> None:
     write_manifest(
         args.out,
         {
+            "model_kind": "text_onnx",
             "source_model": args.model,
+            "source_revision": revision,
             "architecture": type(lm).__name__,
             "primary_input": "input_ids",
             "hidden_states_layer": HIDDEN_LAYER,
             "opset": OPSET,
             "exporter": "torch.onnx legacy (dynamo=False)",
             "variants": {
-                v.name: {"file": v.path.name, "fidelity_vs_fp32": v.fidelity} for v in variants
+                v.name: {
+                    "file": v.path.relative_to(args.out).as_posix(),
+                    "fidelity_vs_fp32": v.fidelity,
+                    "sequence_length_agreement": v.sequence_length_agreement,
+                    "speculative_compatible": v.speculative_compatible,
+                }
+                for v in variants
             },
             "transformers": transformers.__version__,
             "torch": torch.__version__,

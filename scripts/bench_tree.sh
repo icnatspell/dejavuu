@@ -23,16 +23,20 @@ METHODS=baseline,pld,copyspec,pld_plus,adapld,anpd,cacheback,lookahead,logit_spe
 
 mkdir -p results
 [ -f "$STORE" ] || uv run python -m dejavuu.tools.build_specbench_corpus --out "$STORE"
+STEM=$(basename "$DECODER")
+RUN=${RUN:-"results/tree-${STEM}-$(date -u +%Y%m%d-%H%M%S)"}
+mkdir -p "$RUN"
 
 for VARIANT in fp32 int8 q4; do
     GRAPH="$DECODER/onnx/model_$VARIANT.onnx"
     [ -f "$GRAPH" ] || continue
-    STEM=$(basename "$DECODER")
-    uv run python -m dejavuu.eval.specbench \
+    uv run python -m dejavuu.eval.bench --dataset specbench \
+        --protocol first-turn-workload \
         --model-path "$DECODER" --variant "$VARIANT" --provider "$PROVIDER" \
         --methods "$METHODS" --per-category "$K" --max-new "$MAX_NEW" \
         --budget "$BUDGET" --tree --width "$WIDTH" --threads "$THREADS" \
         --datastore "$STORE" \
-        --csv "results/specbench_${STEM}_${VARIANT}_tree.csv" \
-        --log "results/specbench_${STEM}_${VARIANT}_tree.log"
+        --out "$RUN/$VARIANT"
 done
+
+echo "run bundles: $RUN"
