@@ -48,6 +48,10 @@ class DecodeSpec(BaseModel):
     # token in the target's top-k, trading token identity for speed. Quality cost is
     # measured against the greedy baseline via the response scorers.
     accept_top_k: int = Field(1, ge=1)
+    # FLy-style entropy gate (0 = off): only loosen where the target's normalized entropy
+    # exceeds this; confident positions stay exact, so the top-k rule cannot accept an
+    # unlikely runner-up. Composes with accept_top_k.
+    accept_entropy_gate: float = Field(0.0, ge=0.0, le=1.0)
 
 
 class MeasurementSpec(BaseModel):

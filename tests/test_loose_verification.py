@@ -9,7 +9,7 @@ token identity for a longer accepted length. Refs #15.
 import numpy as np
 
 from dejavuu.core.engine import generate
-from dejavuu.core.tree import DraftTree, pick_child
+from dejavuu.core.tree import DraftTree, normalized_entropy, pick_child
 from dejavuu.core.verifier import Verifier
 from dejavuu.drafters import make_drafter
 
@@ -54,6 +54,24 @@ class _Cycle(Verifier):
             logits[i, (t + 1) % self.V] = 9.0
             logits[i, (t + 2) % self.V] = 5.0
         return logits, [], None
+
+
+def test_entropy_gate_keeps_confident_positions_exact():
+    # Peaked logits -> the model is confident (low entropy). A drafted runner-up must be
+    # rejected (corrected to argmax) despite top_k=2, because the gate demotes to exact.
+    tree = DraftTree.chain([0, 1])  # drafted child = token 1 (the runner-up)
+    confident = np.array([20.0, 1.0, 0.0, 0.0])
+    assert normalized_entropy(confident) < 0.5
+    assert pick_child(tree, 0, confident, 0, None, top_k=2, entropy_gate=0.5) == (0, None)
+
+
+def test_entropy_gate_loosens_uncertain_positions():
+    # Near-flat logits -> high entropy. The same drafted runner-up is now accepted at
+    # top_k=2, because the gate lets loosening through where the model is uncertain.
+    tree = DraftTree.chain([0, 1])
+    uncertain = np.array([0.2, 0.1, 0.0, 0.0])
+    assert normalized_entropy(uncertain) > 0.5
+    assert pick_child(tree, 0, uncertain, 0, None, top_k=2, entropy_gate=0.5) == (1, 1)
 
 
 def test_loose_acceptance_never_accepts_fewer_than_lossless():

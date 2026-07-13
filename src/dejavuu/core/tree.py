@@ -59,6 +59,15 @@ def mask(parent: list[int], past_len: int) -> np.ndarray:
     return bias
 
 
+def normalized_entropy(logits_row: np.ndarray) -> float:
+    """Shannon entropy of softmax(logits), normalized to [0, 1] by log(vocab). 0 means
+    one token dominates (confident); 1 means a uniform distribution (maximally uncertain)."""
+    e = np.exp(logits_row - logits_row.max())
+    p = e / e.sum()
+    h = float(-(p * np.log(p + 1e-12)).sum())
+    return h / np.log(len(logits_row))
+
+
 def pick_child(
     tree: DraftTree,
     node: int,
@@ -66,6 +75,7 @@ def pick_child(
     position: int,
     sampler: Sampler | None,
     top_k: int,
+    entropy_gate: float = 0.0,
 ) -> tuple[int, int | None]:
     """One acceptance step, shared by the chain and tree descents. Returns
     (token_to_emit, child_to_descend_into); child None means stop (the token is the
@@ -78,13 +88,25 @@ def pick_child(
 
     Loose (``top_k > 1``, greedy only): accept a drafted child whose token lies in the
     model's top-k, preferring the most probable such child. This trades token identity
-    for speed and is opt-in -- correctness is no longer guaranteed, so callers measure
-    the quality cost (see the response scorers). Falls back to the argmax correction
-    when no child qualifies.
+    for speed and is opt-in -- callers measure the quality cost via the response scorers.
+    Falls back to the argmax correction when no child qualifies.
+
+    Entropy gate (``entropy_gate > 0``, FLy-style): loosen *only* where the target is
+    uncertain. At a position whose normalized entropy is below the gate the model is
+    confident, so acceptance is demoted to exact (top-1) -- this stops the blunt top-k
+    rule from accepting an unlikely runner-up the model would not have chosen.
     """
-    if sampler is None and top_k > 1:
-        k = min(top_k, len(logits_row))
-        topk = {int(t) for t in np.argpartition(-logits_row, k - 1)[:k]}
+    k = top_k
+    if (
+        sampler is None
+        and top_k > 1
+        and entropy_gate > 0.0
+        and normalized_entropy(logits_row) < entropy_gate
+    ):
+        k = 1  # confident position -> stay exact
+    if sampler is None and k > 1:
+        kk = min(k, len(logits_row))
+        topk = {int(t) for t in np.argpartition(-logits_row, kk - 1)[:kk]}
         best, best_logit = None, -np.inf
         for c in tree.children(node):
             tok = tree.token_ids[c]
@@ -104,18 +126,20 @@ def accept(
     sampler: Sampler | None = None,
     base_pos: int = 0,
     top_k: int = 1,
+    entropy_gate: float = 0.0,
 ) -> tuple[list[int], int, list[int]]:
     """Descent over the tree via `pick_child`. `base_pos` is the root's absolute
     position; the token at depth d lives at base_pos+d+1, seeding its draw. Returns
     (emitted tokens incl. bonus, #guesses accepted, accepted node indices incl. root).
     The node-index path drives the KV gather; for a chain it is [0,1,..,n_acc].
-    `top_k > 1` enables loose (lossy) acceptance -- see `pick_child`."""
+    `top_k > 1` enables loose (lossy) acceptance, `entropy_gate` gates it -- see
+    `pick_child`."""
     emitted: list[int] = []
     path = [0]
     node = 0
     while True:
         tok, child = pick_child(
-            tree, node, logits[node], base_pos + len(emitted) + 1, sampler, top_k
+            tree, node, logits[node], base_pos + len(emitted) + 1, sampler, top_k, entropy_gate
         )
         emitted.append(tok)
         if child is None:
