@@ -33,11 +33,18 @@ class STAND(Drafter):
         k = min(self.k, logits.shape[-1])
         for row in range(len(input_tokens)):
             values = logits[row]
-            part = np.argpartition(-values, k - 1)[:k]
+            # ponytail: partition around the k-largest directly -- skips negating the
+            # whole 262k-wide vocab row (an alloc + write per draft token) just to flip
+            # argpartition's low-side to the high-side.
+            part = np.argpartition(values, -k)[-k:]
             top = part[np.argsort(-values[part])]
-            shifted = values - values.max()
-            probs = np.exp(shifted) / np.exp(shifted).sum()
-            candidates = [(int(tok), float(probs[tok])) for tok in top]
+            # ponytail: softmax the k survivors locally -- no full-vocab exp at all.
+            # The denominator only rescales candidates within a node (a constant shift
+            # in log space), which leaves chain ranking and per-node Gumbel order
+            # unchanged; argpartition is then the only vocab-wide pass observe pays.
+            ex = np.exp(values[top] - values[top[0]])
+            probs = ex / ex.sum()
+            candidates = [(int(tok), float(prob)) for tok, prob in zip(top, probs)]
             for n in range(1, min(self.order, row + 1) + 1):
                 self.successors[tuple(input_tokens[row - n + 1 : row + 1])] = candidates
 
