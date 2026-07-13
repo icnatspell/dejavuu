@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import time
 import urllib.request
 from collections import Counter
 from pathlib import Path
@@ -22,13 +21,10 @@ from pathlib import Path
 from loguru import logger
 from tqdm import tqdm
 
-from dejavuu.core import generate
 from dejavuu.decoders.vlm import GENAI_DECODER, VLM, VLM_TREE_DECODER, download
 from dejavuu.eval.harness import (
-    Agg,
     benchmark_metadata,
     create_run_dir,
-    first_divergence,
     load_datastore,
     make_drafter,
     render_table,
@@ -36,6 +32,7 @@ from dejavuu.eval.harness import (
     write_response_jsonl,
     write_run_manifest,
 )
+from dejavuu.eval.runner import RunCase, run_cases
 from dejavuu.eval.specbench import load_specbench
 
 RAW = "https://raw.githubusercontent.com/killthefullmoon/MMSpec/main/dataset/MMSpec/testmini"
@@ -190,22 +187,23 @@ def main() -> None:
         methods,
     )
 
-    # One drafter per method for the whole run -- stateful drafters accumulate.
     drafters = {m: make_drafter(m, datastore) for m in methods}
-    aggs: dict[str, dict[str, Agg]] = {}  # topic -> method -> Agg
-    baseline_out: dict[int, list[int]] = {}
-    baseline_tps: dict[int, float] = {}  # per-prompt baseline tps for the speedup mean
-    responses: list[dict[str, object]] = []
-    for idx, item in enumerate(tqdm(prompts, desc="prompts", unit="q")):
+    cases = [
+        RunCase(
+            str(index), item[0], {"question": item[1], "image": str(item[2]) if is_vlm else None}
+        )
+        for index, item in enumerate(prompts)
+    ]
+
+    def prepare(case: RunCase, _: str) -> list[int]:
         # Build the chat template once per prompt; for VLM splice vision per method
         # (prepare re-stashes prefill embeds), for text reuse the same ids.
-        cat, question = item[0], item[1]
+        question = str(case.metadata["question"])
         if is_vlm:
-            img_path = item[2]
+            img_path = Path(str(case.metadata["image"]))
             content = [{"type": "image"}, {"type": "text", "text": question}]
         else:
             content = [{"type": "text", "text": question}]
-        cat_aggs = aggs.setdefault(cat, {m: Agg() for m in methods})
         text = processor.apply_chat_template(
             [{"role": "user", "content": content}], add_generation_prompt=True
         )
@@ -222,55 +220,21 @@ def main() -> None:
             proc_out = dict(processor(text=text, images=[img], return_tensors="np", **kw))
         else:
             text_ids = processor(text=text, return_tensors="np")["input_ids"][0].tolist()
-        results: dict[str, tuple] = {}
-        for m in methods:
-            ids = vlm.prepare(proc_out) if is_vlm else text_ids
-            drafter = drafters[m]
-            t = time.time()
-            r = generate(
-                vlm,
-                ids,
-                args.max_new,
-                drafter,
-                args.budget,
-                eos,
-                tree=args.tree,
-                width=args.width,
-            )
-            dt = time.time() - t
-            cat_aggs[m].add(r, dt)
-            ddt = dt - r.prefill_s  # decode-only time (prefill excluded)
-            results[m] = (r, ddt)
-            if m == "baseline":
-                baseline_out[idx] = r.tokens
-                baseline_tps[idx] = len(r.tokens) / ddt if ddt else 0.0
-            elif idx in baseline_out:
-                cat_aggs[m].compare(r.tokens, baseline_out[idx])
-                cat_aggs[m].speedups(ddt, len(r.tokens), baseline_tps[idx])
-            baseline = baseline_out[idx]
-            responses.append(
-                {
-                    "case_id": str(idx),
-                    "category": cat,
-                    "method": m,
-                    "tokens": r.tokens,
-                    "text": processor.tokenizer.decode(r.tokens, skip_special_tokens=True),
-                    "baseline_tokens": baseline,
-                    "exact": r.tokens == baseline,
-                    "first_divergence": first_divergence(r.tokens, baseline),
-                    "drafted": r.drafted,
-                    "accepted": r.accepted,
-                    "conditional_attempts": r.conditional_attempts,
-                    "conditional_accepted": r.conditional_accepted,
-                }
-            )
-        logger.info(
-            "prompt {}/{} [{}] | {}",
-            idx + 1,
-            len(prompts),
-            cat,
-            " | ".join(f"{m}: {len(r.tokens) / ddt:.1f}tok/s" for m, (r, ddt) in results.items()),
-        )
+        return vlm.prepare(proc_out) if is_vlm else text_ids
+
+    aggs, responses, failures = run_cases(
+        cases,
+        methods,
+        vlm,
+        prepare,
+        lambda method, _: drafters[method],
+        lambda tokens: processor.tokenizer.decode(tokens, skip_special_tokens=True),
+        max_new=args.max_new,
+        budget=args.budget,
+        eos=eos,
+        tree=args.tree,
+        width=args.width,
+    )
 
     scope = f"{args.per_category}/topic" if args.per_category else args.workload
     render_table(
@@ -284,9 +248,6 @@ def main() -> None:
     if args.csv:
         write_car_profile(args.csv, aggs)
         write_response_jsonl(args.responses or args.csv.with_suffix(".responses.jsonl"), responses)
-        failures = [
-            record for record in responses if record["method"] != "baseline" and not record["exact"]
-        ]
         write_response_jsonl(args.csv.with_suffix(".failures.jsonl"), failures)
         write_run_manifest(
             args.csv,
