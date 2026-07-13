@@ -11,6 +11,8 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from loguru import logger
+
 from dejavuu.core import Sampler, generate
 from dejavuu.core.engine import GenResult
 from dejavuu.drafters import make_drafter as build_drafter
@@ -119,6 +121,11 @@ class BenchmarkRunner:
         construct = drafter_builder or (lambda method: build_drafter(method, datastore))
         run_drafters = {method: construct(method) for method in methods}
         warmed = False
+        # Runs happen in-memory with nothing written until the bundle is finalised, so a
+        # long sweep is otherwise opaque. Log one line per completed prompt -- greppable
+        # in the redirected log of a background run (where a tqdm bar would auto-disable).
+        total_prompts = spec.measurement.repetitions * len(cases)
+        completed_prompts = 0
 
         for repetition in range(spec.measurement.repetitions):
             for case_index, case in enumerate(cases):
@@ -286,6 +293,14 @@ class BenchmarkRunner:
                                 {"role": "assistant", "content": baseline_text},
                             ]
                         )
+                completed_prompts += 1
+                logger.info(
+                    "bench: prompt {}/{} done ({}) x {} methods",
+                    completed_prompts,
+                    total_prompts,
+                    case.category,
+                    len(methods),
+                )
         for category_aggs in aggs.values():
             for agg in category_aggs.values():
                 agg.finalize_repetitions()
