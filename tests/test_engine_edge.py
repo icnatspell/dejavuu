@@ -6,7 +6,7 @@ import numpy as np
 
 from dejavuu.core.engine import generate, generate_seeded
 from dejavuu.core.verifier import KVCache, Verifier
-from dejavuu.drafters import PLD, LogitSpec, SuffixDecoding
+from dejavuu.drafters import PLD, Drafter, DraftTree, LogitSpec, SuffixDecoding
 
 
 class _Cyc(Verifier):
@@ -25,6 +25,15 @@ class _Cyc(Verifier):
         return logits, [], None
 
 
+class _PerfectTwoTokenDraft(Drafter):
+    """Always proposes the deterministic cycle's next two tokens."""
+
+    def propose(self, ctx, past_len, budget):
+        del past_len, budget
+        root = ctx[-1]
+        return DraftTree.chain([root, (root + 1) % 6, (root + 2) % 6])
+
+
 def test_eos_stops_generation():
     m = _Cyc()
     # cycle from 0: 1,2,3,4,5,0,1,... ; eos=3 must stop right after emitting 3.
@@ -41,6 +50,14 @@ def test_on_emit_reports_every_token_and_accept_flag():
     )
     assert [t for t, _ in seen] == res.tokens  # callback fires once per emitted token
     assert all(isinstance(a, bool) for _, a in seen)
+
+
+def test_conditional_acceptance_tracks_each_reached_draft_position():
+    """CAR has one opportunity and one hit per reached draft depth, not per tree node."""
+    res = generate(_Cyc(), [0], max_new=4, drafter=_PerfectTwoTokenDraft(), budget=2)
+
+    assert res.conditional_attempts == [2, 2]
+    assert res.conditional_accepted == [2, 2]
 
 
 def test_tree_falls_back_to_chain_losslessly_when_unsupported():

@@ -8,6 +8,7 @@ import csv
 import json
 import os
 import platform
+import re
 from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -28,11 +29,23 @@ __all__ = [
     "DRAFTERS",
     "Agg",
     "benchmark_metadata",
+    "create_run_dir",
+    "first_divergence",
     "load_datastore",
     "make_drafter",
     "render_table",
+    "write_car_profile",
+    "write_response_jsonl",
     "write_run_manifest",
 ]
+
+
+def first_divergence(actual: list[int], baseline: list[int]) -> int | None:
+    """Return the first mismatched output position, including a length mismatch."""
+    for index, (got, expected) in enumerate(zip(actual, baseline, strict=False)):
+        if got != expected:
+            return index
+    return min(len(actual), len(baseline)) if len(actual) != len(baseline) else None
 
 
 def benchmark_metadata(
@@ -61,6 +74,19 @@ def benchmark_metadata(
     }
 
 
+def create_run_dir(root: Path, name: str, manifest: dict[str, object]) -> Path:
+    """Create one non-appendable benchmark run directory and its manifest.
+
+    A run directory is the comparison unit: summary, CAR, responses, failures, and
+    logs beneath it all share exactly one immutable decode configuration.
+    """
+    slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
+    path = root / slug
+    path.mkdir(parents=True, exist_ok=False)
+    (path / "manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+    return path
+
+
 def write_run_manifest(csv_path: Path, metadata: dict[str, object]) -> Path:
     """Write stable, machine-readable run metadata beside a benchmark CSV.
 
@@ -73,6 +99,65 @@ def write_run_manifest(csv_path: Path, metadata: dict[str, object]) -> Path:
     manifest.parent.mkdir(parents=True, exist_ok=True)
     manifest.write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n")
     return manifest
+
+
+def write_car_profile(csv_path: Path, aggs: dict[str, dict[str, Agg]]) -> Path:
+    """Write conditional acceptance rate at every reached draft position.
+
+    A long-form sidecar keeps the summary CSV readable while preserving the curve
+    needed to distinguish a strong first guess from a continuation that stays useful.
+    The denominator counts only target-path positions that were actually proposed.
+    """
+    profile = csv_path.with_suffix(".car.csv")
+    profile.parent.mkdir(parents=True, exist_ok=True)
+    with profile.open("w", newline="") as f:
+        writer = csv.DictWriter(
+            f,
+            fieldnames=[
+                "category",
+                "method",
+                "depth",
+                "opportunities",
+                "accepted",
+                "conditional_acceptance",
+                "cumulative_survival",
+            ],
+        )
+        writer.writeheader()
+        for category, method_aggs in sorted(aggs.items()):
+            for method, agg in sorted(method_aggs.items()):
+                survival = 1.0
+                for depth, opportunities in enumerate(agg.conditional_attempts, start=1):
+                    accepted = agg.conditional_accepted[depth - 1]
+                    conditional = accepted / opportunities if opportunities else 0.0
+                    survival *= conditional
+                    writer.writerow(
+                        {
+                            "category": category,
+                            "method": method,
+                            "depth": depth,
+                            "opportunities": opportunities,
+                            "accepted": accepted,
+                            "conditional_acceptance": f"{conditional:.4f}" if opportunities else "",
+                            "cumulative_survival": f"{survival:.4f}" if opportunities else "",
+                        }
+                    )
+    logger.info("CAR profile -> {}", profile)
+    return profile
+
+
+def write_response_jsonl(path: Path, records: list[dict[str, object]]) -> Path:
+    """Persist one generated response per benchmark case and method.
+
+    Summary metrics reveal a regression; these records make it inspectable by keeping
+    the case identity, decoded output, token ids, and caller-supplied run telemetry.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w") as f:
+        for record in records:
+            f.write(json.dumps(record, sort_keys=True) + "\n")
+    logger.info("responses -> {}", path)
+    return path
 
 
 def load_datastore(path: Path, tokenizer) -> list[list[int]]:
@@ -93,15 +178,29 @@ class Agg:
     verify_s: float = 0.0
     learn_s: float = 0.0
     prefill_s: float = 0.0
+    draft_setup_s: float = 0.0
+    prepare_s: float = 0.0
+    model_load_s: float = 0.0
     exact: bool = True  # strict gate (text): any per-prompt mismatch flips it
     cmp_tok: int = 0  # tokens compared vs baseline (non-strict / VLM match %)
     match_tok: int = 0
+    conditional_attempts: list[int] = field(default_factory=list)
+    conditional_accepted: list[int] = field(default_factory=list)
     ratios: list[float] = field(default_factory=list)  # per-prompt tps/baseline_tps
+    repetition_series: dict[str, dict[str, list[float]]] = field(default_factory=dict)
+    repeat_std: dict[str, float] = field(default_factory=dict)
     # per-prompt samples for mean +/- std (tps, accept len/%, the four ms timings);
     # pooled sums above stay for speedup(batch) and the exactness gate.
     series: dict[str, list[float]] = field(default_factory=lambda: defaultdict(list))
 
-    def add(self, r: GenResult, dt: float) -> None:
+    def add(
+        self,
+        r: GenResult,
+        dt: float,
+        prepare_s: float = 0.0,
+        model_load_s: float = 0.0,
+        sample_key: str | None = None,
+    ) -> None:
         self.tokens += len(r.tokens)
         self.steps += r.steps
         self.drafted += r.drafted
@@ -111,9 +210,19 @@ class Agg:
         self.verify_s += r.verify_s
         self.learn_s += r.learn_s
         self.prefill_s += r.prefill_s
-        ddt = dt - r.prefill_s  # decode-only wallclock
+        self.draft_setup_s += r.draft_setup_s
+        self.prepare_s += prepare_s
+        self.model_load_s += model_load_s
+        while len(self.conditional_attempts) < len(r.conditional_attempts):
+            self.conditional_attempts.append(0)
+            self.conditional_accepted.append(0)
+        for depth, opportunities in enumerate(r.conditional_attempts):
+            self.conditional_attempts[depth] += opportunities
+            self.conditional_accepted[depth] += r.conditional_accepted[depth]
+        ddt = dt - r.prefill_s - r.draft_setup_s  # online hot-path wallclock
         st = r.steps or 1
         s = self.series
+        before = {name: len(values) for name, values in s.items()}
         if ddt:
             s["tps"].append(len(r.tokens) / ddt)
         s["alen"].append(len(r.tokens) / st)
@@ -126,17 +235,49 @@ class Agg:
             s["ms_out"].append(ddt / len(r.tokens) * 1e3)
             s["submitted_out"].append(r.drafted / len(r.tokens))
             s["verified_out"].append((r.drafted + r.steps) / len(r.tokens))
-        s["prefill"].append(r.prefill_s / st * 1e3)
+        s["model_load"].append(model_load_s * 1e3)
+        s["prepare"].append(prepare_s * 1e3)
+        s["prefill"].append(r.prefill_s * 1e3)
+        s["draft_setup"].append(r.draft_setup_s * 1e3)
         s["draft"].append(r.draft_s / st * 1e3)
         s["verify"].append(r.verify_s / st * 1e3)
         s["learn"].append(r.learn_s / st * 1e3)
         s["overhead"].append((ddt - r.draft_s - r.verify_s - r.learn_s) / st * 1e3)
+        if sample_key is not None:
+            for name, values in s.items():
+                start = before.get(name, 0)
+                if len(values) > start:
+                    self.repetition_series.setdefault(name, {}).setdefault(sample_key, []).extend(
+                        values[start:]
+                    )
 
-    def speedups(self, dt: float, n_tok: int, base_tps: float) -> None:
+    def speedups(
+        self,
+        dt: float,
+        n_tok: int,
+        base_tps: float,
+        sample_key: str | None = None,
+    ) -> None:
         """Record this prompt's speedup vs its own baseline (for the per-prompt mean,
         as opposed to the pooled aggregate ratio). Call once per spec result."""
         if dt and base_tps:
-            self.ratios.append((n_tok / dt) / base_tps)
+            ratio = (n_tok / dt) / base_tps
+            self.ratios.append(ratio)
+            if sample_key is not None:
+                self.repetition_series.setdefault("ratios", {}).setdefault(sample_key, []).append(
+                    ratio
+                )
+
+    def finalize_repetitions(self) -> None:
+        """Collapse repeated timings to per-case means and retain within-case variance."""
+        for name, case_values in self.repetition_series.items():
+            means = [fmean(values) for values in case_values.values() if values]
+            within = [stdev(values) if len(values) > 1 else 0.0 for values in case_values.values()]
+            self.repeat_std[name] = fmean(within) if within else 0.0
+            if name == "ratios":
+                self.ratios = means
+            else:
+                self.series[name] = means
 
     def compare(self, out: list[int], baseline: list[int]) -> None:
         """Record exactness vs the baseline (both the strict bool and token-match
@@ -151,7 +292,7 @@ class Agg:
 def _decode_tps(a: Agg) -> float:
     """tok/s over decode time only -- prefill is a one-time prompt tax, orthogonal to
     speculative decoding, so including it unfairly dilutes the decode-loop speedup."""
-    d = a.gen_s - a.prefill_s
+    d = a.gen_s - a.prefill_s - a.draft_setup_s
     return a.tokens / d if d else 0.0
 
 
@@ -176,6 +317,11 @@ def _pair(vals: list[float], prec: int) -> tuple[str, str]:
     return ("", "") if ms is None else (f"{ms[0]:.{prec}f}", f"{ms[1]:.{prec}f}")
 
 
+def _repeat(a: Agg, name: str, prec: int = 1) -> str:
+    value = a.repeat_std.get(name)
+    return "-" if value is None else f"{value:.{prec}f}"
+
+
 def render_table(
     title: str,
     methods: list[str],
@@ -197,6 +343,7 @@ def render_table(
         "category",
         "method",
         "tok/s",
+        "tok/s repeat sd",
         "speedup(batch)",
         "speedup(prompt)",
         "accept len",
@@ -204,9 +351,13 @@ def render_table(
         "draft/out",
         "verify in/out",
         "ms/out",
+        "ms/out repeat sd",
         "root top1",
         "root top5",
+        "model load ms",
+        "prepare ms",
         "prefill ms",
+        "draft setup ms",
         "draft ms",
         "verify ms",
         "learn ms",
@@ -221,7 +372,8 @@ def render_table(
         "speedup(batch) = Σtokens/Σdecode-time ÷ baseline — throughput over the whole "
         "category, long outputs weighted more.   "
         "speedup(prompt) = mean of per-prompt speedup ratios — each prompt weighted "
-        "equally, reflects the typical single-prompt experience."
+        "equally, reflects the typical single-prompt experience. ± is workload "
+        "dispersion over per-case means; repeat sd is within-case timing variation."
     )
     for cat, cat_aggs in sorted(aggs.items()):
         base = cat_aggs.get("baseline")
@@ -246,6 +398,7 @@ def render_table(
                 cat if mi == 0 else "",
                 m,
                 _fmt(_mstd(s["tps"])),
+                _repeat(a, "tps"),
                 speedup,
                 _fmt(_mstd(a.ratios), prec=2, suffix="x"),
                 _fmt(_mstd(s["alen"]), prec=2),
@@ -253,9 +406,13 @@ def render_table(
                 _fmt(_mstd(s["submitted_out"]), prec=2),
                 _fmt(_mstd(s["verified_out"]), prec=2),
                 _fmt(_mstd(s["ms_out"]), prec=1),
+                _repeat(a, "ms_out"),
                 _fmt(_mstd([p * 100 for p in s["root_top1"]]), prec=0, suffix="%"),
                 _fmt(_mstd([p * 100 for p in s["root_top5"]]), prec=0, suffix="%"),
+                _fmt(_mstd(s["model_load"]), prec=0),
+                _fmt(_mstd(s["prepare"]), prec=0),
                 _fmt(_mstd(s["prefill"]), prec=0),
+                _fmt(_mstd(s["draft_setup"]), prec=0),
                 _fmt(_mstd(s["draft"]), prec=0),
                 _fmt(_mstd(s["verify"]), prec=0),
                 _fmt(_mstd(s["learn"]), prec=0),
@@ -287,6 +444,7 @@ def render_table(
                         "method",
                         "tok_s",
                         "tok_s_std",
+                        "tok_s_repeat_std",
                         "speedup_batch",
                         "speedup_prompt",
                         "speedup_prompt_std",
@@ -300,12 +458,19 @@ def render_table(
                         "verified_per_output_std",
                         "ms_per_output",
                         "ms_per_output_std",
+                        "ms_per_output_repeat_std",
                         "root_top1",
                         "root_top1_std",
                         "root_top5",
                         "root_top5_std",
+                        "model_load_ms",
+                        "model_load_ms_std",
+                        "prepare_ms",
+                        "prepare_ms_std",
                         "prefill_ms",
                         "prefill_ms_std",
+                        "draft_setup_ms",
+                        "draft_setup_ms_std",
                         "draft_ms",
                         "draft_ms_std",
                         "verify_ms",
@@ -336,6 +501,7 @@ def render_table(
                             cat,
                             m,
                             *_pair(s["tps"], 4),
+                            f"{a.repeat_std.get('tps', 0.0):.4f}",
                             speedup,
                             *_pair(a.ratios, 4),
                             *_pair(s["alen"], 4),
@@ -343,9 +509,13 @@ def render_table(
                             *_pair(s["submitted_out"], 4),
                             *_pair(s["verified_out"], 4),
                             *_pair(s["ms_out"], 4),
+                            f"{a.repeat_std.get('ms_out', 0.0):.4f}",
                             *_pair(s["root_top1"], 4),
                             *_pair(s["root_top5"], 4),
+                            *_pair(s["model_load"], 2),
+                            *_pair(s["prepare"], 2),
                             *_pair(s["prefill"], 2),
+                            *_pair(s["draft_setup"], 2),
                             *_pair(s["draft"], 2),
                             *_pair(s["verify"], 2),
                             *_pair(s["learn"], 2),

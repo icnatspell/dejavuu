@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import cache
 
 import numpy as np
@@ -32,9 +32,15 @@ class GenResult:
     verify_s: float = 0.0  # cumulative time in model.forward
     learn_s: float = 0.0  # cumulative time in the post-verify drafter callbacks
     prefill_s: float = 0.0  # one-time prompt prefill (kept out of per-step overhead)
+    draft_setup_s: float = 0.0  # per-request drafter reset (online once, not decode)
     root_proposals: int = 0
     root_top1: int = 0
     root_top5: int = 0
+    # Position-conditioned acceptance telemetry. Index 0 is the first draft
+    # position below the anchor. A depth joins the denominator only when the
+    # target path reached it and the drafter supplied a candidate there.
+    conditional_attempts: list[int] = field(default_factory=list)
+    conditional_accepted: list[int] = field(default_factory=list)
 
 
 @cache  # warn once per model class, not every prompt
@@ -65,6 +71,24 @@ def _accept_chain(
         node = child
 
 
+def _record_conditional_acceptance(res: GenResult, opportunities: int, accepted: int) -> None:
+    """Accumulate conditional acceptance rate (CAR) counts by target-path depth.
+
+    CAR[d] asks: after depths before d were accepted, how often did the drafter's
+    candidate at d match the verifier? It intentionally excludes unreachable tree
+    siblings and absent candidates, so chain and tree results share one definition.
+    """
+    if opportunities < accepted:
+        raise ValueError("accepted draft positions cannot exceed CAR opportunities")
+    while len(res.conditional_attempts) < opportunities:
+        res.conditional_attempts.append(0)
+        res.conditional_accepted.append(0)
+    for depth in range(opportunities):
+        res.conditional_attempts[depth] += 1
+        if depth < accepted:
+            res.conditional_accepted[depth] += 1
+
+
 def generate(
     model: Verifier,
     prompt_ids: list[int],
@@ -90,10 +114,13 @@ def generate(
     t0 = time.perf_counter()
     past, committed = model.prefill(seq)  # prompt[-1] stays as the first anchor
     prefill_s = time.perf_counter() - t0
+    draft_setup_s = 0.0
     if drafter is not None:
+        t0 = time.perf_counter()
         drafter.reset(seq)  # rotate per-request state for stateful drafters
+        draft_setup_s = time.perf_counter() - t0
 
-    res = GenResult(tokens=[], prefill_s=prefill_s)
+    res = GenResult(tokens=[], prefill_s=prefill_s, draft_setup_s=draft_setup_s)
     while len(res.tokens) < max_new:
         if drafter is None:
             dtree = DraftTree.chain([seq[-1]])
@@ -131,10 +158,14 @@ def generate(
         committed_old = committed
         if use_tree:
             emitted, n_acc, path = treelib.accept(dtree, logits, sampler, committed)
+            # Every accepted child was an opportunity. The next position joins the
+            # denominator only when the final accepted node has another candidate.
+            _record_conditional_acceptance(res, n_acc + int(bool(dtree.children(path[-1]))), n_acc)
             committed += len(path)  # anchor + accepted path nodes
             past = model.gather_kv(present, committed_old, path)
         else:
             emitted, n_acc = _accept_chain(dtree, logits, sampler, committed)
+            _record_conditional_acceptance(res, min(guesses, n_acc + 1), n_acc)
             path = list(range(n_acc + 1))  # root + accepted guesses (contiguous)
             committed += n_acc + 1  # anchor + accepted guesses; bonus is next anchor
             past = model.rollback_kv(present, committed)
@@ -187,8 +218,10 @@ def generate_seeded(
     t0 = time.perf_counter()
     past, committed, root_logits = model.prefill_seeded(seq)
     prefill_s = time.perf_counter() - t0
+    t0 = time.perf_counter()
     drafter.reset(seq)
-    res = GenResult(tokens=[], prefill_s=prefill_s)
+    draft_setup_s = time.perf_counter() - t0
+    res = GenResult(tokens=[], prefill_s=prefill_s, draft_setup_s=draft_setup_s)
     root = int(root_logits.argmax())
     seq.append(root)  # known target output, still uncommitted in the KV
     # LogitSpec's observation hook can use the prefill distribution to construct
@@ -229,10 +262,12 @@ def generate_seeded(
         committed_old = committed
         if use_tree:
             emitted, n_acc, path = treelib.accept(dtree, logits, None, committed)
+            _record_conditional_acceptance(res, n_acc + int(bool(dtree.children(path[-1]))), n_acc)
             committed += len(path)
             past = model.gather_kv(present, committed_old, path)
         else:
             emitted, n_acc = _accept_chain(dtree, logits, None, committed)
+            _record_conditional_acceptance(res, min(guesses, n_acc + 1), n_acc)
             path = list(range(n_acc + 1))
             committed += n_acc + 1
             past = model.rollback_kv(present, committed)

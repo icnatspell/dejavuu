@@ -29,7 +29,7 @@ from transformers import (
 
 from dejavuu.core.engine import generate
 from dejavuu.core.verifier import KVCache, Verifier
-from dejavuu.decoders.vlm import REPO
+from dejavuu.decoders.vlm import REPO, REVISION
 from dejavuu.drafters import STAND, AdaPLD, PLDPlus, SuffixDecoding, TokenRecycling
 
 
@@ -82,7 +82,7 @@ class TorchTreeDecoder(Verifier):
 
 
 def _load_backbone() -> LlamaForCausalLM:
-    vlm = AutoModelForImageTextToText.from_pretrained(REPO, dtype=torch.float32)
+    vlm = AutoModelForImageTextToText.from_pretrained(REPO, revision=REVISION, dtype=torch.float32)
     text = vlm.model.text_model
     cfg = LlamaConfig(**{**text.config.to_dict(), "architectures": ["LlamaForCausalLM"]})
     lm = LlamaForCausalLM(cfg)
@@ -106,7 +106,7 @@ PROMPTS = [
 
 def main(max_new: int = 24, budget: int = 8, width: int = 3) -> None:
     model = TorchTreeDecoder(_load_backbone())
-    tok = AutoTokenizer.from_pretrained(REPO)
+    tok = AutoTokenizer.from_pretrained(REPO, revision=REVISION)
     eos = tok.eos_token_id
 
     def run(label, make, tree):

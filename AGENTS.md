@@ -37,7 +37,32 @@ and the VLM (`VLM`) through the shared `Verifier`/engine. Preserve this:
   drafter can't pass both, it isn't done.
 - Losslessness is the verifier's job, not the drafter's. A drafter may propose
   anything; correctness comes from greedy accept / seeded-sample coupling in the
-  engine. Never weaken that gate to make a drafter "work".
+  engine. Preserve that acceptance logic in model-free conformance tests; do not
+  change it merely to hide a mismatch from a particular backend.
+
+## Treat backend exactness as a metric, not a universal validity gate
+
+The model-free conformance suite remains bit-exact because it protects the engine's
+acceptance and KV-path invariants. Real inference backends, especially quantized
+graphs, may select different tokens for incremental and multi-token execution because
+their kernels use different numerical paths. That does not automatically invalidate a
+performance benchmark or indict a drafter.
+
+- Benchmark divergence is **always diagnostic, never a failure**. Record exact-match
+  rate, first-divergence position, and token overlap alongside task-quality metrics, but
+  keep measuring latency, throughput, acceptance, and phase costs after a divergence. No
+  benchmark code path may mark a run invalid, reject an artifact, or exit nonzero because
+  generated tokens differ from the baseline.
+- Lossless correctness is enforced only in the model-free conformance suite
+  (`tests/test_conformance.py`), which stays bit-exact to protect the engine's accept/KV
+  invariants. That is the place for a bit-exact claim -- not a mode on the practical
+  benchmark runner.
+- Compare methods against the same model artifact, provider, precision, prompt set,
+  decoding policy, and draft budget. Do not compare a quantized method run with an FP32
+  baseline and call the difference a drafter regression.
+- Describe numerical behavior accurately: distinguish backend precision or
+  sequence-shape variation from a broken accept/KV implementation. Use task-level or
+  semantic quality evaluation when token identity is not the product requirement.
 
 ## Classify every cost into one tier
 
@@ -75,7 +100,7 @@ is too coarse, **extend the profiler, not a one-off script:** add the timer to
 method, and have the new bucket partition the same decode total (subtract it out of
 `overhead`) so the columns still sum -- the `learn` bucket was added exactly this way.
 After improving, re-run the same bench and quote the before/after split, confirming the
-bucket shrank and acceptance/exactness held.
+bucket shrank and reporting any acceptance, exactness, or task-quality change.
 
 Across a whole sweep, `scripts/gap_rank.py <csv>` ranks methods by speedup and labels
 each one's dominant reducible gap (acceptance / learn / overhead / verify-bound) off the

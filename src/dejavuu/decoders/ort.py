@@ -43,16 +43,36 @@ def _causal_bias(n: int, past_len: int) -> np.ndarray:
     return bias
 
 
-def make_session(path: Path, provider: str = "cpu", threads: int = 0) -> ort.InferenceSession:
+def make_session(
+    path: Path,
+    provider: str = "cpu",
+    threads: int = 0,
+    *,
+    allow_provider_fallback: bool = False,
+) -> ort.InferenceSession:
     opts = ort.SessionOptions()
     if threads:
         opts.intra_op_num_threads = threads
-    providers = (
-        ["CUDAExecutionProvider", "CPUExecutionProvider"]
-        if provider == "cuda"
-        else ["CPUExecutionProvider"]
-    )
-    return ort.InferenceSession(str(path), sess_options=opts, providers=providers)
+    available = ort.get_available_providers()
+    if provider == "cuda" and "CUDAExecutionProvider" not in available:
+        if not allow_provider_fallback:
+            raise RuntimeError(
+                "CUDAExecutionProvider is unavailable; install an ONNX Runtime GPU build "
+                "or explicitly allow CPU fallback"
+            )
+        providers = ["CPUExecutionProvider"]
+    else:
+        providers = (
+            ["CUDAExecutionProvider", "CPUExecutionProvider"]
+            if provider == "cuda"
+            else ["CPUExecutionProvider"]
+        )
+    session = ort.InferenceSession(str(path), sess_options=opts, providers=providers)
+    if provider == "cuda" and not allow_provider_fallback:
+        actual = session.get_providers()
+        if not actual or actual[0] != "CUDAExecutionProvider":
+            raise RuntimeError(f"requested CUDAExecutionProvider but session uses {actual}")
+    return session
 
 
 @dataclass

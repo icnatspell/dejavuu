@@ -6,6 +6,40 @@ All notable changes to this project are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+- Token divergence from the baseline is recorded as a diagnostic and never fails a
+  benchmark run. The runner writes first-divergence position, exact-match, and overlap
+  to `divergences.jsonl`, marks the bundle `valid_with_divergences`, and keeps measuring
+  latency/throughput/acceptance/phase costs; a `speculative_compatible: false` variant
+  loads with a warning instead of being rejected. Model-free chain/tree conformance
+  (`tests/test_conformance.py`) stays bit-exact and is where lossless correctness is
+  enforced.
+- Reference-based response-quality scorers (`eval/scorers.py`): every response records
+  `scores` against its baseline text so diverging output can still be judged on task
+  quality. Ships a stdlib `text_similarity` (alignment-based) scorer; register more in
+  `SCORERS`.
+
+- Unified benchmark runner with validated run specifications, full-conversation dataset
+  adapters, independent text/VLM model adapters, warm/cold memory modes, repetitions,
+  cache scopes, balanced method scheduling, and immutable result bundles.
+- Pinned SpecBench, SPEED-Bench, MMSpec, Gemma, and SmolVLM source revisions plus
+  recursive model-artifact integrity manifests and manifest-selected ONNX graph roles.
+- Separate response, failure, and phase-measurement JSONL records, including selected
+  VLM graph and external-decoder provenance in every run bundle.
+
+### Changed
+- Benchmark throughput now excludes model preparation, KV prefill, and per-request
+  drafter setup; all online-once costs are reported separately from the decode hot path.
+- Every benchmark modality now requires bit-exact output against its own autoregressive
+  baseline. Divergent VLM runs are retained as invalid diagnostics, never valid speedups.
+- CUDA provider requests fail when CUDA is unavailable unless fallback is explicit and
+  the actual provider is recorded.
+- Text adapters normalize list, tensor, and mapping tokenizer outputs across supported
+  Transformers versions; externally selected VLM decoders must pass integrity checks.
+- Decoder builds now measure batched-causal versus incremental KV-cache agreement and
+  mark sequence-length-sensitive quantized variants incompatible with strict
+  speculative benchmarks.
+
 ## [0.1.0] - 2026-07-12
 
 First public release of `dejavuu`.

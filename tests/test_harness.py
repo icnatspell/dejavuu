@@ -1,8 +1,23 @@
 """Public benchmark-artifact metadata checks."""
 
+import csv
 import json
+import subprocess
+from pathlib import Path
 
-from dejavuu.eval.harness import benchmark_metadata, write_run_manifest
+import pytest
+
+from dejavuu.core.engine import GenResult
+from dejavuu.eval.harness import (
+    Agg,
+    benchmark_metadata,
+    create_run_dir,
+    first_divergence,
+    write_car_profile,
+    write_response_jsonl,
+    write_run_manifest,
+)
+from dejavuu.eval.specbench import resolve_model_root
 
 
 def test_write_run_manifest_records_configuration_next_to_csv(tmp_path):
@@ -38,3 +53,103 @@ def test_benchmark_metadata_keeps_execution_settings_explicit():
     assert metadata["decode"] == {"budget": 8, "max_new": 128, "tree": True, "width": 2}
     assert metadata["runtime"] == {"provider": "cpu", "threads": 2}
     assert {"cpu_count", "machine", "processor"} <= metadata["host"].keys()
+
+
+def test_specbench_explicit_model_path_bypasses_default_download():
+    """A locally built decoder directory is a first-class Spec-Bench target."""
+    decoder = Path("/tmp/qwen3-decoder")
+
+    assert resolve_model_root(decoder, "fp32") == decoder
+
+
+def test_reproducible_decoder_scripts_are_valid_bash():
+    """The documented build and tree-benchmark entry points parse before a long run."""
+    root = Path(__file__).parents[1]
+
+    for script in ("scripts/build_decoder.sh", "scripts/bench_tree.sh"):
+        assert subprocess.run(["bash", "-n", root / script], check=False).returncode == 0
+
+
+def test_car_profile_is_long_form_by_category_method_and_depth(tmp_path):
+    csv_path = tmp_path / "run.csv"
+    agg = Agg(conditional_attempts=[4, 2], conditional_accepted=[3, 1])
+
+    profile = write_car_profile(csv_path, {"coding": {"pld": agg}})
+
+    assert profile == tmp_path / "run.car.csv"
+    assert list(csv.DictReader(profile.open())) == [
+        {
+            "category": "coding",
+            "method": "pld",
+            "depth": "1",
+            "opportunities": "4",
+            "accepted": "3",
+            "conditional_acceptance": "0.7500",
+            "cumulative_survival": "0.7500",
+        },
+        {
+            "category": "coding",
+            "method": "pld",
+            "depth": "2",
+            "opportunities": "2",
+            "accepted": "1",
+            "conditional_acceptance": "0.5000",
+            "cumulative_survival": "0.3750",
+        },
+    ]
+
+
+def test_response_jsonl_preserves_case_method_tokens_and_text(tmp_path):
+    path = tmp_path / "run.responses.jsonl"
+
+    write_response_jsonl(
+        path,
+        [{"case_id": "speed-1", "method": "pld", "tokens": [4, 5], "text": "hello"}],
+    )
+
+    assert [json.loads(line) for line in path.read_text().splitlines()] == [
+        {"case_id": "speed-1", "method": "pld", "tokens": [4, 5], "text": "hello"}
+    ]
+
+
+def test_run_directory_is_immutable_and_contains_manifest(tmp_path):
+    run = create_run_dir(tmp_path, "qwen speed/tree", {"dataset": "speedbench", "budget": 8})
+
+    assert run.name == "qwen-speed-tree"
+    assert json.loads((run / "manifest.json").read_text()) == {"budget": 8, "dataset": "speedbench"}
+
+
+def test_aggregate_excludes_drafter_setup_from_decode_metrics():
+    """Per-request drafter reset is online-once work, not decode throughput."""
+    agg = Agg()
+    result = GenResult(
+        tokens=[1, 2],
+        steps=1,
+        prefill_s=1.0,
+        draft_setup_s=2.0,
+        draft_s=0.2,
+        verify_s=0.3,
+        learn_s=0.1,
+    )
+
+    agg.add(result, dt=4.0)
+
+    assert agg.draft_setup_s == 2.0
+    assert agg.series["ms_out"] == [500.0]
+    assert agg.series["overhead"] == [pytest.approx(400.0)]
+
+
+def test_first_divergence_reports_a_length_only_mismatch():
+    assert first_divergence([1, 2], [1, 2, 3]) == 2
+
+
+def test_repetition_variance_is_separate_from_workload_variance():
+    agg = Agg()
+    result = GenResult(tokens=[1, 2], steps=1)
+    agg.add(result, dt=2.0, sample_key="case-1")
+    agg.add(result, dt=4.0, sample_key="case-1")
+
+    agg.finalize_repetitions()
+
+    assert agg.series["tps"] == [0.75]
+    assert agg.repeat_std["tps"] == pytest.approx(0.3535533905932738)
