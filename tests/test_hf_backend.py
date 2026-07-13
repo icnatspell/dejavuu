@@ -67,6 +67,18 @@ def test_hf_supports_tree(hf_model):
     assert hf_model.supports_tree is True
 
 
+def test_hf_tree_sampled_stand_matches_baseline(hf_model):
+    """Gumbel-ranked STAND branches remain lossless under real tree attention."""
+    from dejavuu.core.sampling import Sampler
+
+    sampler = Sampler(temperature=0.8, seed=7)
+    base = generate(hf_model, PROMPT, 24, sampler=sampler).tokens
+    out = generate(
+        hf_model, PROMPT, 24, drafter=make_drafter("stand"), tree=True, width=4, sampler=sampler
+    ).tokens
+    assert out == base
+
+
 @pytest.mark.parametrize("use_tree", [False, True], ids=["chain", "tree"])
 def test_hf_sdpa_lossless(tiny_dir, use_tree: bool):
     """SDPA (the GPU-perf attention kernel) must honour the 4D tree mask and stay
@@ -97,6 +109,6 @@ def test_hf_real_model_lossless(use_tree: bool):
     ]
     model = HFBackend(mid, device="cpu")
     base = generate(model, prompt, 32).tokens
-    for name in ("pld", "suffix_decoding", "token_recycling", "adapld"):
+    for name in ("pld", "suffix_decoding", "token_recycling", "adapld", "stand"):
         out = generate(model, prompt, 32, drafter=make_drafter(name), tree=use_tree).tokens
         assert out == base, name

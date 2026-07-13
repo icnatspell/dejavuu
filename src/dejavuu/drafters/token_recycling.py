@@ -21,17 +21,21 @@ class TokenRecycling(Drafter):
         self.successors: dict[int, list[tuple[int, float]]] = {}
 
     def observe(self, input_tokens: list[int], logits) -> None:
-        m = logits.max(axis=-1, keepdims=True)
-        e = np.exp(logits - m)
-        probs = e / e.sum(axis=-1, keepdims=True)  # softmax = acceptance-prob proxy
         k = min(self.k, logits.shape[-1])
-        # top-k by logit, descending. argpartition is O(vocab) (vs a full O(vocab log vocab)
-        # sort) -- it isolates the k best unordered, then we sort just those k.
-        part = np.argpartition(-logits, k - 1, axis=-1)[:, :k]  # [N, k] best, unordered
         rows = np.arange(len(input_tokens))[:, None]
+        # top-k by logit, descending. argpartition is O(vocab) (vs a full O(vocab log vocab)
+        # sort) -- it isolates the k best unordered, then we sort just those k. Partition
+        # around the high side directly so we never negate the whole [N, vocab] matrix.
+        part = np.argpartition(logits, -k, axis=-1)[:, -k:]  # [N, k] best, unordered
         topk = np.take_along_axis(part, np.argsort(-logits[rows, part], axis=-1), axis=-1)
-        for r, (tok, row) in enumerate(zip(input_tokens, topk, strict=True)):
-            self.successors[tok] = [(int(t), float(probs[r, t])) for t in row]
+        # softmax the k survivors per row -- no [N, vocab] exp/probs array. The dropped
+        # denominator only rescales a row's own candidates, which leaves each token's
+        # successor order (and the recycling tree it grows) unchanged.
+        top_logits = np.take_along_axis(logits, topk, axis=-1)
+        e = np.exp(top_logits - top_logits[:, :1])
+        probs = e / e.sum(axis=-1, keepdims=True)
+        for tok, row, prow in zip(input_tokens, topk, probs, strict=True):
+            self.successors[tok] = [(int(t), float(p)) for t, p in zip(row, prow)]
 
     def propose(self, ctx: list[int], past_len: int, budget: int) -> DraftTree:
         chain = [ctx[-1]]

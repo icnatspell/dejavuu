@@ -3,9 +3,15 @@
 All graph specifics (layer/head counts, KV naming, position_ids, tree support) are
 auto-derived by OrtDecoder from the ONNX I/O -- nothing here is Gemma-specific beyond
 the default repo, so any conventional causal-LM export works by pointing `root` at it.
-KV is plain numpy, sliced on accept -- ponytail: measured at 0.08% of the forward
-pass (0.02 ms vs 24 ms, 270m/q4/cpu), so NOT allocation-bound; IOBinding would buy
-~nothing here. Revisit only if a profile on a bigger model/GPU shows the copy biting.
+KV is plain numpy, sliced on accept -- ponytail: the accept-slice is 0.08% of the
+forward (0.02 ms vs 24 ms, 270m/q4/cpu). The forward *does* scale with context
+(~0.4 ms/MB of KV: 12.5 ms @ 64 tok -> 42.8 ms @ 2048 tok), but that cost is inside
+the graph -- the past->present concat + attention over the growing cache. A prototype
+that keeps KV as bound OrtValues across steps (no numpy round-trip) recovered only a
+flat ~2 ms (1.06-1.13x, not scaling), so the numpy boundary is not the bottleneck.
+Removing the in-graph concat copy needs a past_present_share_buffer (genai-built)
+export, and even then the attention read over the KV is irreducible. Not worth it on
+270m/q4/cpu; revisit on a bigger model / GPU where the copy/compute ratio shifts.
 """
 
 from __future__ import annotations
