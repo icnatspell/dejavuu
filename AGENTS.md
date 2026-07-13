@@ -1,5 +1,13 @@
 # Working agreement
 
+## Issue-first integration
+
+Before starting any integration work, check GitHub for an existing issue with
+`gh issue list --state all`. Link the work to that issue when one exists; otherwise,
+create an issue that describes the method or integration, intended benefit, expected
+drafter/verifier impact, and primary paper or code reference before implementation.
+Do this before creating an implementation branch or changing code.
+
 ## Engineering standards
 
 - Write comments, docstrings, and benchmark explanations for an AI/ML engineer.
