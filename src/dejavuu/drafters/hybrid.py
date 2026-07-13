@@ -41,30 +41,63 @@ class Hybrid(Drafter):
     """Base retrieval drafter + logit-table fallback. Every engine hook feeds BOTH
     sub-drafters so the fallback's table and the base's index both stay warm."""
 
-    def __init__(self, base: Drafter, fallback: Drafter, merge: bool = False):
+    def __init__(self, base: Drafter, fallback: Drafter, mode: str = "empty"):
+        # mode: "empty" -> use the fallback only where the base finds nothing (V1).
+        #       "graft" -> also add the fallback as a sibling branch on leftover budget.
+        #       "tail"  -> extend the base's deepest path with fallback successors on
+        #                  leftover budget (grows the winning path, not a rival branch).
         self.base = base
         self.fallback = fallback
-        self.merge = merge
+        self.mode = mode
 
     def propose(self, ctx: list[int], past_len: int, budget: int) -> DraftTree:
-        # Chain path: sibling branches would get wrong logits (no tree attention), so we
-        # can only *replace* on empty, never merge branches here.
         tree = self.base.propose(ctx, past_len, budget)
-        if len(tree.token_ids) > 1:  # base produced a real draft
+        if self.mode == "tail":
+            return self._extend_tail(tree, budget)  # linear -> valid on the chain path
+        # Sibling branches would get wrong logits with no tree attention, so on the chain
+        # path we can only replace-on-empty, never merge.
+        if len(tree.token_ids) > 1:
             return tree
         return self.fallback.propose(ctx, past_len, budget)
 
     def propose_tree(self, ctx: list[int], past_len: int, budget: int, width: int) -> DraftTree:
         tree = self.base.propose_tree(ctx, past_len, budget, width)
+        if self.mode == "tail":
+            return self._extend_tail(tree, budget)
         guesses = len(tree.token_ids) - 1
         if guesses == 0:  # base empty -> use the fallback outright
             return self.fallback.propose_tree(ctx, past_len, budget, width)
-        if not self.merge or guesses >= budget:  # base fired and (V1, or no budget left)
+        if self.mode != "graft" or guesses >= budget:  # base fired and (V1, or no budget left)
             return tree
-        # V2: base fired but left budget -> graft the fallback's chain as an extra root
-        # branch. Free on flat verify; the verifier accepts whichever branch is right.
-        fb = self.fallback.propose_tree(ctx, past_len, budget, width)
-        return _graft(tree, fb, budget)
+        # graft the fallback's chain as an extra root branch on leftover budget.
+        return _graft(tree, self.fallback.propose_tree(ctx, past_len, budget, width), budget)
+
+    def _extend_tail(self, tree: DraftTree, budget: int) -> DraftTree:
+        """Continue the base's deepest path with the fallback's successors, using the
+        budget the base left unused. When the base is empty this extends from the root
+        (== the plain fallback); when it fired short, it lengthens the winning path
+        rather than adding a rival branch."""
+        guesses = len(tree.token_ids) - 1
+        if guesses >= budget:
+            return tree
+        depth = [0] * len(tree.parent)
+        for i, p in enumerate(tree.parent):
+            if p >= 0:
+                depth[i] = depth[p] + 1
+        tail = max(range(len(depth)), key=lambda i: depth[i])  # deepest node (first if tie)
+        # Fallback successors of the tail token (token_recycling keys on ctx[-1]).
+        cont = self.fallback.propose([tree.token_ids[tail]], 0, budget - guesses).token_ids[1:]
+        tokens, parent = list(tree.token_ids), list(tree.parent)
+        seen = set(tokens)
+        prev = tail
+        for tok in cont:
+            if len(tokens) - 1 >= budget or tok in seen:  # respect budget; no path cycle
+                break
+            tokens.append(tok)
+            parent.append(prev)
+            seen.add(tok)
+            prev = len(tokens) - 1
+        return DraftTree(tokens, parent)
 
     def reset(self, prompt_ids: list[int]) -> None:
         self.base.reset(prompt_ids)
@@ -99,11 +132,19 @@ class SuffixRecycle(Hybrid):
 
 
 class SuffixRecycleMerge(Hybrid):
-    """suffix_recycle, but grafts the logit fallback onto the tree whenever suffix leaves
-    budget unused (not only when suffix is empty). Free on flat multi-token verify."""
+    """suffix_recycle, but grafts the logit fallback as a sibling branch whenever suffix
+    leaves budget unused (not only when suffix is empty)."""
 
     def __init__(self):
-        super().__init__(SuffixDecoding(), TokenRecycling(), merge=True)
+        super().__init__(SuffixDecoding(), TokenRecycling(), mode="graft")
+
+
+class SuffixRecycleTail(Hybrid):
+    """suffix_recycle, but *extends* suffix's deepest path with logit-table successors on
+    leftover budget -- lengthening the winning path instead of adding a rival branch."""
+
+    def __init__(self):
+        super().__init__(SuffixDecoding(), TokenRecycling(), mode="tail")
 
 
 class PldRecycle(Hybrid):

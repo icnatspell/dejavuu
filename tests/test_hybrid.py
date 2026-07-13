@@ -69,6 +69,23 @@ def test_graft_skips_a_duplicate_first_branch():
     assert merged.token_ids == [3, 7]  # unchanged
 
 
+def test_tail_mode_extends_the_deepest_path_not_a_sibling():
+    # base copies root 3 -> 7 (1 guess, budget left). Fallback continues from the tail
+    # token 7 with 8, 9. Tail mode appends them to the SAME path (a chain), not a branch.
+    class _FromTail(Drafter):
+        def propose(self, ctx, past_len, budget):
+            return DraftTree.chain([ctx[-1], 8, 9]) if ctx[-1] == 7 else DraftTree.chain([ctx[-1]])
+
+    class _CopyOne(Drafter):
+        def propose(self, ctx, past_len, budget):
+            return DraftTree.chain([ctx[-1], 7])
+
+    h = Hybrid(_CopyOne(), _FromTail(), mode="tail")
+    t = h.propose([1, 2, 3], 0, 4)
+    assert t.token_ids == [3, 7, 8, 9]  # one path, extended
+    assert t.parent == [-1, 0, 1, 2]  # a chain, no branching
+
+
 def test_every_hook_feeds_both_sub_drafters():
     base, fallback = _Fixed(7), _Fixed(42)
     h = Hybrid(base, fallback)

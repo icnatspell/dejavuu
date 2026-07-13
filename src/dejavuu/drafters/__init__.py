@@ -17,7 +17,13 @@ from dejavuu.drafters.asam import ASAM
 from dejavuu.drafters.base import Drafter, DraftTree
 from dejavuu.drafters.cacheback import Cacheback
 from dejavuu.drafters.copyspec import CopySpec
-from dejavuu.drafters.hybrid import Hybrid, PldRecycle, SuffixRecycle, SuffixRecycleMerge
+from dejavuu.drafters.hybrid import (
+    Hybrid,
+    PldRecycle,
+    SuffixRecycle,
+    SuffixRecycleMerge,
+    SuffixRecycleTail,
+)
 from dejavuu.drafters.logit_spec import LogitSpec
 from dejavuu.drafters.lookahead import Lookahead
 from dejavuu.drafters.ngram_trie import NGramTrie
@@ -65,6 +71,9 @@ DRAFTERS: dict[str, DrafterSpec] = {
     ),
     "suffix_recycle_merge": DrafterSpec(
         SuffixRecycleMerge, doc="suffix index + logit fallback grafted onto leftover budget"
+    ),
+    "suffix_recycle_tail": DrafterSpec(
+        SuffixRecycleTail, doc="suffix index + logit successors extending the deepest path"
     ),
     "pld_recycle": DrafterSpec(PldRecycle, doc="PLD + verifier-logit fallback"),
     "rest": DrafterSpec(REST, needs_datastore=True, doc="retrieval from a static datastore"),
@@ -134,6 +143,7 @@ __all__ = [
     "SuffixIndex",
     "SuffixRecycle",
     "SuffixRecycleMerge",
+    "SuffixRecycleTail",
     "TokenRecycling",
     "make_drafter",
     "require_method",
