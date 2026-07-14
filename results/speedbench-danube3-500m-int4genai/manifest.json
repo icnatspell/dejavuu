@@ -1,0 +1,236 @@
+{
+  "config_sha256": "7647e856430fd4882152e529b7a1eadaee27343ed338c7527c0c9ff9ab2cb8b5",
+  "datasets": [
+    {
+      "checksum": null,
+      "revision": "487aa718444e816458d1a0a52bfce7a454285cf4",
+      "source": "nvidia/SPEED-Bench",
+      "split": "qualitative"
+    }
+  ],
+  "host": {
+    "cpu_count": 20,
+    "machine": "x86_64",
+    "processor": "x86_64"
+  },
+  "model": {
+    "actual_providers": [
+      "CUDAExecutionProvider",
+      "CPUExecutionProvider"
+    ],
+    "kind": "text_onnx",
+    "requested_provider": "cuda",
+    "source": "/local/home/nick/.cache/dejavuu/danube3-500m"
+  },
+  "model_artifact": {
+    "files": {
+      "onnx/fp16_genai/model.onnx": "6a0269de2022d3f35e77859f03b2643c4b27ec809384f7ed816232b1025208da",
+      "onnx/fp16_genai/model.onnx.data": "0740b6f6b9970d405db5925b9a968b35efd84261e7612ad3f47964627c47a098",
+      "onnx/int4_genai/model.onnx": "47841ac06f8b424fe32eb670283e626983d2a0d201b24f0f66a80a8dd81c9a6b",
+      "onnx/int4_genai/model.onnx.data": "9433376827733eb5da09785bb9a6622197dd7026b3638f580a17220bf2d8cef1",
+      "onnx/model_fp32.onnx": "ceab5b0c471998e1f90f692d04149303f73b1c21ae47aec26f1993de7834ebd6",
+      "onnx/model_int8.onnx": "3a80a33e062e6754308c4da7f75486067268b63581dac0c1f9e16e2102f985e0",
+      "onnx/model_q4.onnx": "901cf887bb90448e05a8d65727f50f3b807016bb1362c05858d18ffaa7f20dc9",
+      "tokenizer.json": "cd176ccb0c3b91fea2e5407613047ed01f1990d9661b446ace2d2c49b466d2e4",
+      "tokenizer_config.json": "3b0ef092e9d814ba4190eb49836128c195e608ae854da29acea351a7a4b7a311"
+    },
+    "provenance": {
+      "architecture": "LlamaForCausalLM",
+      "exporter": "torch.onnx legacy (dynamo=False)",
+      "genai_chain_note": "fused chain-only GPU variants; tree/hidden use the eager export",
+      "hidden_states_layer": -1,
+      "model_kind": "text_onnx",
+      "opset": 17,
+      "primary_input": "input_ids",
+      "source_model": "h2oai/h2o-danube3-500m-base",
+      "source_revision": "0ac6d9d2999a15761bf1cb03d480a1f8e2c845a6",
+      "torch": "2.12.1+cpu",
+      "transformers": "5.12.1",
+      "variants": {
+        "fp16_genai": {
+          "batched_incremental_agreement": 0.9935,
+          "fidelity_vs_fp32": 0.9881,
+          "file": "onnx/fp16_genai/model.onnx",
+          "speculative_compatible": true,
+          "topology": "genai-fused chain-only (no 4D tree mask, no hidden_states)",
+          "validation_note": "batched-vs-incremental 99% over 3 probes (GPU)"
+        },
+        "fp32": {
+          "fidelity_vs_fp32": 1.0,
+          "file": "onnx/model_fp32.onnx",
+          "sequence_length_agreement": 1.0,
+          "speculative_compatible": true
+        },
+        "int4_genai": {
+          "batched_incremental_agreement": 1.0,
+          "fidelity_vs_fp32": 0.7914,
+          "file": "onnx/int4_genai/model.onnx",
+          "speculative_compatible": true,
+          "topology": "genai-fused chain-only (no 4D tree mask, no hidden_states)",
+          "validation_note": "batched-vs-incremental 100% over 3 probes (GPU)"
+        },
+        "int8": {
+          "fidelity_vs_fp32": 0.5625,
+          "file": "onnx/model_int8.onnx",
+          "sequence_length_agreement": 0.6486486486486487,
+          "speculative_compatible": false
+        },
+        "q4": {
+          "fidelity_vs_fp32": 0.71875,
+          "file": "onnx/model_q4.onnx",
+          "sequence_length_agreement": 0.972972972972973,
+          "speculative_compatible": false
+        }
+      }
+    }
+  },
+  "model_artifacts": [
+    {
+      "manifest": {
+        "files": {
+          "onnx/fp16_genai/model.onnx": "6a0269de2022d3f35e77859f03b2643c4b27ec809384f7ed816232b1025208da",
+          "onnx/fp16_genai/model.onnx.data": "0740b6f6b9970d405db5925b9a968b35efd84261e7612ad3f47964627c47a098",
+          "onnx/int4_genai/model.onnx": "47841ac06f8b424fe32eb670283e626983d2a0d201b24f0f66a80a8dd81c9a6b",
+          "onnx/int4_genai/model.onnx.data": "9433376827733eb5da09785bb9a6622197dd7026b3638f580a17220bf2d8cef1",
+          "onnx/model_fp32.onnx": "ceab5b0c471998e1f90f692d04149303f73b1c21ae47aec26f1993de7834ebd6",
+          "onnx/model_int8.onnx": "3a80a33e062e6754308c4da7f75486067268b63581dac0c1f9e16e2102f985e0",
+          "onnx/model_q4.onnx": "901cf887bb90448e05a8d65727f50f3b807016bb1362c05858d18ffaa7f20dc9",
+          "tokenizer.json": "cd176ccb0c3b91fea2e5407613047ed01f1990d9661b446ace2d2c49b466d2e4",
+          "tokenizer_config.json": "3b0ef092e9d814ba4190eb49836128c195e608ae854da29acea351a7a4b7a311"
+        },
+        "provenance": {
+          "architecture": "LlamaForCausalLM",
+          "exporter": "torch.onnx legacy (dynamo=False)",
+          "genai_chain_note": "fused chain-only GPU variants; tree/hidden use the eager export",
+          "hidden_states_layer": -1,
+          "model_kind": "text_onnx",
+          "opset": 17,
+          "primary_input": "input_ids",
+          "source_model": "h2oai/h2o-danube3-500m-base",
+          "source_revision": "0ac6d9d2999a15761bf1cb03d480a1f8e2c845a6",
+          "torch": "2.12.1+cpu",
+          "transformers": "5.12.1",
+          "variants": {
+            "fp16_genai": {
+              "batched_incremental_agreement": 0.9935,
+              "fidelity_vs_fp32": 0.9881,
+              "file": "onnx/fp16_genai/model.onnx",
+              "speculative_compatible": true,
+              "topology": "genai-fused chain-only (no 4D tree mask, no hidden_states)",
+              "validation_note": "batched-vs-incremental 99% over 3 probes (GPU)"
+            },
+            "fp32": {
+              "fidelity_vs_fp32": 1.0,
+              "file": "onnx/model_fp32.onnx",
+              "sequence_length_agreement": 1.0,
+              "speculative_compatible": true
+            },
+            "int4_genai": {
+              "batched_incremental_agreement": 1.0,
+              "fidelity_vs_fp32": 0.7914,
+              "file": "onnx/int4_genai/model.onnx",
+              "speculative_compatible": true,
+              "topology": "genai-fused chain-only (no 4D tree mask, no hidden_states)",
+              "validation_note": "batched-vs-incremental 100% over 3 probes (GPU)"
+            },
+            "int8": {
+              "fidelity_vs_fp32": 0.5625,
+              "file": "onnx/model_int8.onnx",
+              "sequence_length_agreement": 0.6486486486486487,
+              "speculative_compatible": false
+            },
+            "q4": {
+              "fidelity_vs_fp32": 0.71875,
+              "file": "onnx/model_q4.onnx",
+              "sequence_length_agreement": 0.972972972972973,
+              "speculative_compatible": false
+            }
+          }
+        }
+      },
+      "role": "model",
+      "root": "/local/home/nick/.cache/dejavuu/danube3-500m"
+    }
+  ],
+  "model_load_s": 11.407359543954954,
+  "phase_definitions": {
+    "decode": "online hot path: draft + verify + learn + overhead",
+    "draft_setup": "online once: drafter reset for the request",
+    "prefill": "online once: prompt KV construction",
+    "prepare": "online once: render/tokenize/image decode/processor/vision encode"
+  },
+  "run": {
+    "dataset": {
+      "image_size": 0,
+      "n": 20,
+      "name": "speedbench",
+      "per_category": 0,
+      "protocol": "first-turn-workload",
+      "revision": null,
+      "split": "qualitative",
+      "workload": "all"
+    },
+    "decode": {
+      "budget": 4,
+      "max_new": 128,
+      "seed": 0,
+      "temperature": 0.0,
+      "top_p": 1.0,
+      "tree": false,
+      "width": 2
+    },
+    "measurement": {
+      "cache_scope": "run",
+      "model_memory": "warm",
+      "order_seed": 0,
+      "repetitions": 1,
+      "warmups": 1
+    },
+    "methods": [
+      "baseline",
+      "pld",
+      "copyspec",
+      "pld_plus",
+      "adapld",
+      "anpd",
+      "cacheback",
+      "lookahead",
+      "logit_spec",
+      "ngram_trie",
+      "token_recycling",
+      "suffix_recycle",
+      "suffix_recycle_merge",
+      "suffix_recycle_tail",
+      "pld_recycle",
+      "rest",
+      "suffix_decoding",
+      "sam_decoding",
+      "stand",
+      "asam",
+      "asam_verify",
+      "asd",
+      "asd_verify"
+    ],
+    "model": {
+      "allow_provider_fallback": false,
+      "allow_unverified_artifact": false,
+      "kind": "auto",
+      "path": "/local/home/nick/.cache/dejavuu/danube3-500m",
+      "provider": "cuda",
+      "threads": 0,
+      "variant": "int4_genai"
+    },
+    "output": {
+      "path": "results/speedbench-danube3-500m-int4genai",
+      "responses": true
+    }
+  },
+  "run_id": "speedbench-danube3-500m-int4genai",
+  "schema_version": 2,
+  "software": {
+    "dejavuu": "0.1.0",
+    "onnxruntime": "unknown",
+    "transformers": "5.12.1"
+  },
+  "status": "valid_with_divergences"
+}
