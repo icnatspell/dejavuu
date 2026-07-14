@@ -40,6 +40,18 @@ All notable changes to this project are recorded here. The format follows
   mark sequence-length-sensitive quantized variants incompatible with strict
   speculative benchmarks.
 
+### Fixed
+- `asd_verify`'s verify-aware draft sizing no longer collapses to length-1 drafts on
+  launch-bound backends. Its cost model fits `verify_s ~ c0 + c1*submitted`, but the
+  no-draft (M=1) steps were folded into that fit; on a backend whose verify cost is a
+  step function (a large fixed jump from M=1 to M>=2, then a small per-token slope — e.g.
+  the int4_genai GPU chain path, measured ~7ms at M=1, +6.6ms at M>=2, ~1ms/token after),
+  those cheap samples smeared the jump into the per-token slope and over-penalised length.
+  Only drafted (M>=2) steps now inform the fit, so the sizer recovers the true (cheap)
+  marginal cost and drafts long again (danube int4_genai: +14% decode speedup at budget 4,
+  and it scales with budget instead of regressing). Lossless behaviour is unchanged —
+  sizing only shortens a pure-retrieval draft; chain/tree conformance stays bit-exact.
+
 ## [0.1.0] - 2026-07-12
 
 First public release of `dejavuu`.

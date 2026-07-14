@@ -297,6 +297,34 @@ def test_asam_tree_branches_from_longer_source():
     assert sorted(tree.token_ids[c] for c in tree.children(0)) == [7, 9]
 
 
+def _feed_step_cost(drafter, no_match_frac_pct: int, alpha: float) -> None:
+    """Feed a launch-bound step-function verify cost: a no-draft step (k=0) is cheap;
+    any drafted step (k>=1) pays a fixed jump then a small per-token slope. Also mix in
+    a fraction of no-match (k=0) steps, the way a real run does."""
+    drafter.reset([])
+    drafter._alpha = alpha
+    cost = {0: 0.007, 1: 0.013, 2: 0.014, 3: 0.015, 4: 0.016}  # jump at k=0 -> k=1
+    for _ in range(50):
+        for _ in range(no_match_frac_pct // 10):
+            drafter.note_cost(cost[0], 0)
+        for k in (1, 2, 3, 4):
+            drafter.note_cost(cost[k], k)
+
+
+def test_verify_aware_ignores_no_draft_steps_and_keeps_drafting_long():
+    """Regression for the step-function cost bug. A launch-bound backend's verify jumps
+    sharply from M=1 to M>=2; if the cheap no-draft (k=0) steps are folded into the linear
+    drafted-cost fit, that fixed jump is misread as a steep per-token slope and the sizer
+    collapses drafts to length 1. Excluding k=0 samples keeps the slope the true (cheap)
+    marginal cost, so with decent acceptance the drafter still sizes long despite a heavy
+    mix of no-draft steps."""
+    from dejavuu.drafters import ASAM
+
+    d = ASAM(verify_aware=True, max_len=8)
+    _feed_step_cost(d, no_match_frac_pct=40, alpha=0.6)
+    assert d._best_len(4) >= 3, d._best_len(4)
+
+
 def test_logit_spec_uses_the_top_logit_to_retrieve_a_next_next_token_draft():
     """The current verifier logits choose first-token tree branches; each branch
     retrieves the continuation that historically followed that candidate."""

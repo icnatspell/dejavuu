@@ -24,8 +24,10 @@ class ASAM(Drafter):
       `E_accept(k) / (1 + g*k)`, where E_accept uses a geometric acceptance model with
       EMA per-token accept rate `alpha`, and `g = c1/c0` is the marginal-vs-fixed verify
       cost (learned online from `note_cost`). When verify is cheap (g->0) the optimum
-      pushes to the ceiling (aggressive); when expensive it pulls in (conservative), so
-      one method self-selects the regime instead of being pinned to one.
+      pushes to the ceiling (aggressive); when expensive it pulls in (conservative). Only
+      drafted (k>=1) steps feed the cost fit -- a launch-bound backend's verify jumps
+      sharply from M=1 to M>=2, so mixing the cheap no-draft steps in would smear that jump
+      into `c1` and wrongly collapse drafts to length 1.
 
     Special cases: datastore off + length at ceiling -> SuffixDecoding; short matches +
     cap binds -> ANPD; datastore on -> SAM-Decoding. Lossless under greedy (pure
@@ -119,7 +121,12 @@ class ASAM(Drafter):
         return max(0.0, c1) / max(c0, 1e-9)
 
     def note_cost(self, verify_s: float, submitted: int) -> None:
-        if not self.verify_aware:
+        # Only drafted (k>=1) steps inform the cost of *drafting*. A no-draft (k=0, M=1)
+        # step is a different, cheaper population: on a launch-bound backend verify jumps
+        # sharply from M=1 to M>=2, so folding k=0 samples into this linear fit smears that
+        # fixed jump into the per-token slope (c1), which then over-penalises length and
+        # collapses drafts to 1. Excluding them keeps the slope the true marginal cost.
+        if not self.verify_aware or submitted <= 0:
             return
         b, x, y = self.beta, float(submitted), verify_s
         self._n = b * self._n + (1 - b)
@@ -150,20 +157,24 @@ def _demo() -> None:
     d.update([0, 1])  # acc_len 1 << 6 proposed
     assert d.cap < 8, d.cap
 
-    # verify-aware: cheap verify (flat cost vs k) -> draft to the ceiling; expensive
-    # verify (steep cost vs k) -> pull the length in.
+    # verify-aware: cheap no-draft (k=0) samples must be ignored so the M=1->M>=2 jump is
+    # not smeared into the slope. With the jump excluded and a cheap marginal token, the
+    # sizer drafts long; a steep marginal cost pulls the length in.
     la = ASAM(verify_aware=True)
     la.reset([])
-    la._alpha = 0.7
-    for k in range(1, 9):  # verify barely grows with k -> g ~ 0
-        la.note_cost(0.010 + 0.0001 * k, k)
-    cheap_k = la._best_len(8)
+    la._alpha = 0.6
+    for _ in range(50):
+        la.note_cost(0.007, 0)  # no-draft steps: must not fool the drafted-cost fit
+        for k in (1, 2, 3, 4):  # drafted: cheap per-token slope -> go long
+            la.note_cost(0.013 + 0.0005 * k, k)
+    cheap_k = la._best_len(4)
     la2 = ASAM(verify_aware=True)
     la2.reset([])
-    la2._alpha = 0.7
-    for k in range(1, 9):  # verify grows steeply with k -> g large
+    la2._alpha = 0.6
+    for k in range(1, 5):  # steep per-token slope -> pull the length in
         la2.note_cost(0.010 + 0.02 * k, k)
-    pricey_k = la2._best_len(8)
+    pricey_k = la2._best_len(4)
+    assert cheap_k >= 3, cheap_k
     assert cheap_k > pricey_k, (cheap_k, pricey_k)
     print(f"asam ok; cap adapts, verify-aware k: cheap={cheap_k} pricey={pricey_k}")
 

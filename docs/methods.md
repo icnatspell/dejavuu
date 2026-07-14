@@ -177,6 +177,15 @@ draft sizing on top.
   datastore-precision risk. A strong no-setup default.
 - **Drawback:** gives up the cross-domain knowledge a good datastore can provide, and like
   SuffixDecoding it starts cold at the beginning of each request.
+- **Note on `asd_verify` and the backend cost curve:** the verify-aware sizer learns the
+  verify cost online and shortens drafts when extra draft tokens are expensive to verify.
+  This pays off only when that per-token cost is real. On a *launch-bound* backend (e.g.
+  the int4_genai GPU chain path) verify is a step function — a large fixed jump from a
+  1-token to a multi-token step, then nearly flat per extra token — so the marginal token
+  is cheap and the sizer should draft long. Only drafted (multi-token) steps inform the
+  cost fit for exactly this reason; folding the cheap 1-token steps in would misread the
+  fixed jump as a steep per-token slope. On a backend whose verify genuinely grows with
+  length (e.g. some CPU paths), the same sizer correctly pulls drafts in.
 
 ### PLD+, prompt lookup with hidden-state reranking
 PLD finds the longest trailing n-gram and copies the *most recent* continuation. PLD+
