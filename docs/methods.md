@@ -141,6 +141,26 @@ tree mode recursively branches across several recent followers.
   evidence. Small cache capacities can evict useful patterns; large capacities trade
   memory for fewer evictions.
 
+### NGramBackoff, memory-bounded multi-order cache with backoff
+Where Cacheback stores one *fixed* order (a leader length), NGramBackoff stores single-token
+continuations at *every* order in a range and drafts by trying the longest (most specific)
+context first, **backing off** to shorter contexts on a miss — the classic stupid-backoff
+idea applied to a persistent, online, memory-bounded cache. A single global LRU caps the
+total footprint across all orders. Inspired by NG+ (issue #7); the NG+ paper is paywalled,
+so this is a concept implementation, not a verified reproduction.
+- **Drafting benefit:** a known long context is exploited when present, and a general
+  shorter context still fires otherwise, so it keeps drafting where a single-order cache
+  would miss. It produced the longest accepted runs in its family on SPEED-Bench.
+- **Verification:** pure retrieval — it only proposes; the shared greedy verifier decides
+  what is emitted, so it is lossless under greedy (chain and tree conformance are bit-exact).
+- **Drawback / tuning:** the backoff floor matters. Backing off all the way to a *unigram*
+  (`min_order=1`) drafts from a one-token context — a weak predictor that halves root top-1
+  agreement (~0.46 → ~0.25 on SPEED-Bench) and, since every drafted step pays the verifier's
+  fixed cost regardless, wastes budget on low-confidence guesses. The default floor is
+  therefore `min_order=2`. A **confidence-gated backoff** (only draft from an order whose
+  continuation is frequent enough) is the natural next refinement, and is the concrete
+  remaining lever for closing the gap to Cacheback's higher precision.
+
 ### SAM-Decoding, static plus dynamic, longest match wins
 Keep two suffix indexes at once: a static datastore (like REST) and the live generation
 (like SuffixDecoding). Each step, draft from whichever one gives the longer suffix match.

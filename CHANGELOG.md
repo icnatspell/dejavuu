@@ -6,6 +6,13 @@ All notable changes to this project are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+- `ngram_backoff` drafter: a memory-bounded, multi-order n-gram cache that stores
+  single-token continuations at every order in a range and drafts longest-context-first
+  with high->low backoff (inspired by NG+, issue #7). Distinct from `cacheback` (single
+  fixed order) and `ngram_trie` (prompt-rebuilt). Registered, chain/tree conformance
+  bit-exact; default `min_order=2` (unigram backoff drafts low-confidence guesses).
+
 ## [0.2.0] - 2026-07-14
 
 ### Added

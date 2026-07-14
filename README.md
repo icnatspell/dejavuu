@@ -151,6 +151,7 @@ VLM. REST, SuffixDecoding, SAM, and ASAM share one reusable token-only `SuffixIn
 | `token_recycling` | tree drafts from the verifier's own logits |
 | `stand` | probability-ranked n-gram trees learned from verifier logits |
 | `cacheback` | bounded LRU cache of recent leader/follower n-grams |
+| `ngram_backoff` | memory-bounded multi-order n-gram cache; drafts longest-context-first with backoff |
 | `rest` | retrieval from a static datastore |
 | `suffix_decoding` | online suffix index over global and per-request history |
 | `sam_decoding` | static datastore plus live generation; drafts from the longer match |
