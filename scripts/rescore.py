@@ -45,7 +45,7 @@ def semantic_similarity(prediction: str, reference: str) -> float:
         return 1.0
     if _encoder is None:
         try:
-            from model2vec import StaticModel
+            from model2vec import StaticModel  # pyrefly: ignore[missing-import]
         except ImportError as exc:
             raise SystemExit("rescore needs model2vec: `uv pip install model2vec`") from exc
         _encoder = StaticModel.from_pretrained(_SEMANTIC_MODEL)
