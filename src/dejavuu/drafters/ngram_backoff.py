@@ -37,12 +37,21 @@ class NGramBackoff(Drafter):
     ``capacity`` bounds the total number of distinct contexts across all orders (the
     memory constraint); ``follower_capacity`` bounds the alternative next tokens kept per
     context. All limits apply online in the hot path.
+
+    ``min_order`` defaults to 2 for a reason worth stating: backing off all the way to a
+    unigram (``min_order=1``) drafts from a single-token context, which is a poor predictor
+    -- on SPEED-Bench (Qwen3-0.6B) it dropped root top-1 agreement from ~0.46 (min_order=3)
+    to ~0.25 and made it the weakest method in its family. Since every drafted step pays
+    the verifier's fixed cost whether or not the guess lands, low-confidence unigram drafts
+    are not worth submitting; keeping a floor of 2 trades a little recall for much higher
+    precision. A confidence-gated backoff (only draft from an order whose continuation is
+    frequent enough) is the natural next refinement.
     """
 
     def __init__(
         self,
-        min_order: int = 1,
-        max_order: int = 3,
+        min_order: int = 2,
+        max_order: int = 4,
         capacity: int = 32_768,
         follower_capacity: int = 4,
     ):
