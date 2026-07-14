@@ -20,6 +20,7 @@ that speaks the conventional I/O works drop-in, LLM or VLM:
 
 from __future__ import annotations
 
+import contextlib
 import re
 from dataclasses import dataclass
 from functools import cached_property
@@ -53,6 +54,12 @@ def make_session(
     opts = ort.SessionOptions()
     if threads:
         opts.intra_op_num_threads = threads
+    if provider == "cuda" and hasattr(ort, "preload_dlls"):
+        # ONNX Runtime GPU builds load their CUDA/cuDNN libs from the nvidia pip packages
+        # at runtime; without this the CUDA provider silently fails to register. No-op on
+        # CPU-only builds and cheap to call once per session.
+        with contextlib.suppress(Exception):  # missing libs fall back to CPU below
+            ort.preload_dlls()
     available = ort.get_available_providers()
     if provider == "cuda" and "CUDAExecutionProvider" not in available:
         if not allow_provider_fallback:
