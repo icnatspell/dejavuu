@@ -1,10 +1,23 @@
 """NGramBackoff -- a memory-bounded, multi-order n-gram cache with high->low backoff.
 
-Inspired by NG+ (issue #7): a hierarchical n-gram cache that keeps useful matches at
-several orders under a fixed memory budget. This is a *concept* implementation -- the NG+
-paper is paywalled (ACM 10.1145/3737902.3768352), so its exact eviction/promotion policy
-was not verified against the source; the design here follows the issue description and the
-standard stupid-backoff n-gram formulation. Reconcile with the paper if access is obtained.
+Loosely inspired by NG+ (issue #7, ACM 10.1145/3737902.3768352), but NOT a reproduction --
+having now read the method, most of NG+ does not map to dejavuu's architecture:
+
+* NG+'s "hierarchy" is a *storage tier* -- frequent low-order n-grams in a DRAM hash map
+  (Hot Cache) and long, rare n-grams on SSD (Cold Storage), sized to fit a large external
+  corpus into constrained AI-PC memory. Its headline contribution is CPU-iGPU pipelining
+  that overlaps SSD retrieval with iGPU verification. Both are AI-PC hardware/systems
+  techniques (SSD-backed store, integrated-GPU I/O overlap) with no counterpart in an
+  ONNX-on-CPU/CUDA runtime, so they are out of scope here.
+* NG+ retains by *frequency* (keep the most popular n-grams) over an *external corpus*.
+  This drafter instead keeps an *online* cache of emitted tokens with *LRU* (recency)
+  retention -- a better fit for dejavuu's input-grounded, local-pattern setting, where
+  recency tends to beat global popularity (the same reason `cacheback`'s LRU works well).
+* The high-to-low-order *backoff at draft time* below is this implementation's own; NG+
+  describes a tiered store, not a backoff query.
+
+So treat this as a standalone multi-order backoff n-gram cache that borrowed NG+'s
+"multi-order, memory-bounded" framing, not as NG+ itself.
 
 How it differs from the existing n-gram drafters:
 
