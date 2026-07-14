@@ -26,6 +26,7 @@ from dejavuu.drafters.hybrid import (
 )
 from dejavuu.drafters.logit_spec import LogitSpec
 from dejavuu.drafters.lookahead import Lookahead
+from dejavuu.drafters.ngram_backoff import NGramBackoff
 from dejavuu.drafters.ngram_trie import NGramTrie
 from dejavuu.drafters.pld_plus import PLDPlus
 from dejavuu.drafters.prompt_lookup import PLD
@@ -61,6 +62,9 @@ DRAFTERS: dict[str, DrafterSpec] = {
     "lookahead": DrafterSpec(Lookahead, doc="multi-candidate n-gram pool"),
     "logit_spec": DrafterSpec(
         LogitSpec, doc="verifier-logit candidates extended by n-gram retrieval"
+    ),
+    "ngram_backoff": DrafterSpec(
+        NGramBackoff, doc="memory-bounded multi-order n-gram cache with high->low backoff"
     ),
     "ngram_trie": DrafterSpec(
         NGramTrie, doc="prompt n-gram continuation trie with deep tree branches"
@@ -135,6 +139,7 @@ __all__ = [
     "Hybrid",
     "LogitSpec",
     "Lookahead",
+    "NGramBackoff",
     "NGramTrie",
     "PLDPlus",
     "PldRecycle",

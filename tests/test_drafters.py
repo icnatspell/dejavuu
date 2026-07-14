@@ -123,6 +123,50 @@ def test_cacheback_frozen_builder_keeps_documents_separate():
     assert payload["entries"] == []  # no pair may span the document boundary
 
 
+def test_ngram_backoff_backs_off_to_a_shorter_order():
+    """A context whose long n-gram is unseen but whose short suffix was seen still drafts,
+    by backing off from the highest order down -- the hierarchical part."""
+    from dejavuu.drafters import NGramBackoff
+
+    d = NGramBackoff(min_order=1, max_order=3)
+    d.reset([])
+    d.update([1, 2, 3, 4])  # learns (3,)->4, (2,3)->4, (1,2,3)->4
+    # (7,8,3) and (8,3) were never seen; (3,)->4 was -> back off to order 1
+    assert d.propose([9, 7, 8, 3], past_len=4, budget=1).token_ids == [3, 4]
+
+
+def test_ngram_backoff_prefers_the_most_specific_order():
+    """When a longer context is known it wins over the shorter one it also matches."""
+    from dejavuu.drafters import NGramBackoff
+
+    d = NGramBackoff(min_order=1, max_order=2)
+    d.reset([])
+    d.update([5, 1, 9, 8, 1, 3])  # (5,1)->9 (order 2); (1,) most-recently ->3 (order 1)
+    # ctx ends (5,1): order-2 (5,1)->9 is more specific than order-1 (1,)->3
+    assert d.propose([0, 5, 1], past_len=3, budget=1).token_ids == [1, 9]
+
+
+def test_ngram_backoff_evicts_under_the_memory_bound():
+    """The global capacity bounds the footprint; the least-recently-used context is dropped."""
+    from dejavuu.drafters import NGramBackoff
+
+    d = NGramBackoff(min_order=1, max_order=1, capacity=1)
+    d.reset([])
+    d.update([1, 2, 3, 4])  # order-1 stream (1,)->2,(2,)->3,(3,)->4; capacity 1 keeps only (3,)->4
+    assert d.propose([0, 1], past_len=2, budget=1).token_ids == [1]  # (1,) evicted -> no draft
+    assert d.propose([0, 3], past_len=2, budget=1).token_ids == [3, 4]  # (3,) survives
+
+
+def test_ngram_backoff_is_lossless_under_chain_and_tree():
+    from dejavuu.drafters import NGramBackoff
+
+    baseline = _generate(_Toy(), [0], 30)
+    for tree in (False, True):
+        gen = _generate(_Toy(), [0], 30, NGramBackoff(min_order=1, max_order=3), tree=tree)
+        assert gen.tokens == baseline.tokens
+        assert gen.accepted > 0
+
+
 def test_stand_reuses_verifier_logits_for_an_ngram_tree():
     from dejavuu.drafters import STAND
 
