@@ -317,6 +317,26 @@ def _pair(vals: list[float], prec: int) -> tuple[str, str]:
     return ("", "") if ms is None else (f"{ms[0]:.{prec}f}", f"{ms[1]:.{prec}f}")
 
 
+def _sig_faster(ratios: list[float]) -> bool:
+    """Is this method *significantly* faster than baseline? True when the 95% CI lower
+    bound of the per-prompt speedup clears 1.0x. The ratios are paired (each is one
+    prompt's tps vs that prompt's baseline), so this is a one-sample test that the typical
+    speedup beats baseline beyond workload dispersion -- i.e. the gap is real, not noise.
+    Needs >=2 prompts (a single prompt has no dispersion to test), so a per-category-1 run
+    never marks anything; that is the point (it can't distinguish methods). Baseline's own
+    ratios are all 1.0, so it never marks."""
+    if len(ratios) < 2:
+        return False
+    lo = fmean(ratios) - 1.96 * stdev(ratios) / (len(ratios) ** 0.5)
+    return lo > 1.0
+
+
+def _fmt_speedup(ratios: list[float]) -> str:
+    """speedup(prompt) cell: 'mean ± std x', suffixed ' *' when significantly > baseline."""
+    cell = _fmt(_mstd(ratios), prec=2, suffix="x")
+    return f"{cell} *" if _sig_faster(ratios) else cell
+
+
 def _repeat(a: Agg, name: str, prec: int = 1) -> str:
     value = a.repeat_std.get(name)
     return "-" if value is None else f"{value:.{prec}f}"
@@ -372,7 +392,8 @@ def render_table(
         "speedup(batch) = Σtokens/Σdecode-time ÷ baseline — throughput over the whole "
         "category, long outputs weighted more.   "
         "speedup(prompt) = mean of per-prompt speedup ratios — each prompt weighted "
-        "equally, reflects the typical single-prompt experience. ± is workload "
+        "equally, reflects the typical single-prompt experience; * = significantly "
+        ">1.0x (95% CI lower bound clears baseline, needs ≥2 prompts). ± is workload "
         "dispersion over per-case means; repeat sd is within-case timing variation."
     )
     for cat, cat_aggs in sorted(aggs.items()):
@@ -400,7 +421,7 @@ def render_table(
                 _fmt(_mstd(s["tps"])),
                 _repeat(a, "tps"),
                 speedup,
-                _fmt(_mstd(a.ratios), prec=2, suffix="x"),
+                _fmt_speedup(a.ratios),
                 _fmt(_mstd(s["alen"]), prec=2),
                 _fmt(_mstd([p * 100 for p in s["apct"]]), prec=0, suffix="%"),
                 _fmt(_mstd(s["submitted_out"]), prec=2),

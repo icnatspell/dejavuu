@@ -10,6 +10,7 @@ import pytest
 from dejavuu.core.engine import GenResult
 from dejavuu.eval.harness import (
     Agg,
+    _sig_faster,
     benchmark_metadata,
     create_run_dir,
     first_divergence,
@@ -18,6 +19,19 @@ from dejavuu.eval.harness import (
     write_run_manifest,
 )
 from dejavuu.eval.specbench import resolve_model_root
+
+
+def test_speedup_significance_marks_only_gaps_that_clear_baseline():
+    # Consistently faster across prompts with little spread -> significant.
+    assert _sig_faster([1.5, 1.6, 1.55, 1.5, 1.45]) is True
+    # Same mean but spanning 1.0 (some prompts slower) -> the gap could be noise.
+    assert _sig_faster([2.2, 0.6, 2.0, 0.7, 2.0]) is False
+    # Barely above 1.0 with real spread -> CI includes 1.0, not significant.
+    assert _sig_faster([1.05, 0.98, 1.1, 0.95]) is False
+    # Too few prompts to test dispersion (per-category-1 runs never mark).
+    assert _sig_faster([3.0]) is False
+    # Baseline's own ratios are all exactly 1.0 -> never marked.
+    assert _sig_faster([1.0, 1.0, 1.0]) is False
 
 
 def test_write_run_manifest_records_configuration_next_to_csv(tmp_path):
