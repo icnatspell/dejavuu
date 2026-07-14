@@ -3,15 +3,17 @@
 All graph specifics (layer/head counts, KV naming, position_ids, tree support) are
 auto-derived by OrtDecoder from the ONNX I/O -- nothing here is Gemma-specific beyond
 the default repo, so any conventional causal-LM export works by pointing `root` at it.
-KV is plain numpy, sliced on accept -- ponytail: the accept-slice is 0.08% of the
-forward (0.02 ms vs 24 ms, 270m/q4/cpu). The forward *does* scale with context
-(~0.4 ms/MB of KV: 12.5 ms @ 64 tok -> 42.8 ms @ 2048 tok), but that cost is inside
-the graph -- the past->present concat + attention over the growing cache. A prototype
-that keeps KV as bound OrtValues across steps (no numpy round-trip) recovered only a
-flat ~2 ms (1.06-1.13x, not scaling), so the numpy boundary is not the bottleneck.
-Removing the in-graph concat copy needs a past_present_share_buffer (genai-built)
-export, and even then the attention read over the KV is irreducible. Not worth it on
-270m/q4/cpu; revisit on a bigger model / GPU where the copy/compute ratio shifts.
+On CPU, KV is plain numpy, sliced on accept -- the accept-slice is 0.08% of the forward
+(0.02 ms vs 24 ms, 270m/q4/cpu), and a prototype that kept KV as bound OrtValues across
+steps recovered only a flat ~2 ms there, because the "numpy round-trip" is a cheap host
+memcpy -- the numpy boundary is not the CPU bottleneck.
+
+On **GPU that round-trip is a PCIe copy** and it dominates: profiling fp32/qwen3-0.6b/CUDA,
+the host<->device KV copy is ~60 ms of a 79 ms step at 1024 tokens and scales with context,
+while the compute floor is launch-bound and flat at ~18 ms. So for `provider=cuda` the
+decoder (`OrtDecoder(device_kv=True)`) keeps KV device-resident via io-binding and trims it
+on-device (issue #46): measured 1.6x @ 256 tok rising to 5.2x @ 2048 tok, decode step flat
+at ~25 ms. CPU is unchanged (device_kv stays off; the numpy path is byte-identical).
 """
 
 from __future__ import annotations
@@ -70,14 +72,17 @@ class Model(Verifier):
     @cached_property
     def _dec(self) -> OrtDecoder:
         path = resolve_graph_path(self.root, self.variant)
-        return OrtDecoder(
-            make_session(
-                path,
-                self.provider,
-                self.threads,
-                allow_provider_fallback=self.allow_provider_fallback,
-            )
+        session = make_session(
+            path,
+            self.provider,
+            self.threads,
+            allow_provider_fallback=self.allow_provider_fallback,
         )
+        # On GPU the host<->device KV copy dominates the verify forward at real sequence
+        # lengths (issue #46), so keep KV device-resident there. CPU is unchanged: the
+        # numpy round-trip is a cheap host memcpy and a prior prototype recovered nothing.
+        device_kv = "CUDAExecutionProvider" in session.get_providers()
+        return OrtDecoder(session, device_kv=device_kv)
 
     @property
     def supports_tree(self) -> bool:
@@ -85,6 +90,14 @@ class Model(Verifier):
 
     def empty_kv(self) -> KVCache:
         return self._dec.empty_kv()
+
+    def rollback_kv(self, kv: KVCache, committed: int) -> KVCache:
+        # Delegate so device_kv sessions trim on-device; the decoder falls back to the
+        # numpy prefix-trim otherwise (identical to the Verifier default).
+        return self._dec.rollback_kv(kv, committed)
+
+    def gather_kv(self, kv: KVCache, committed: int, path: list[int]) -> KVCache:
+        return self._dec.gather_kv(kv, committed, path)
 
     def forward(
         self,
