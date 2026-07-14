@@ -209,6 +209,7 @@ class BenchmarkRunner:
                             ),
                             accept_top_k=spec.decode.accept_top_k,
                             accept_entropy_gate=spec.decode.accept_entropy_gate,
+                            accept_min_prob_ratio=spec.decode.accept_min_prob_ratio,
                         )
                         generation_s = self.clock() - started
                         group[method] = _Completed(

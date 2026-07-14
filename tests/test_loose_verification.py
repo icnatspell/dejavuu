@@ -74,6 +74,25 @@ def test_entropy_gate_loosens_uncertain_positions():
     assert pick_child(tree, 0, uncertain, 0, None, top_k=2, entropy_gate=0.5) == (1, 1)
 
 
+def test_prob_ratio_gate_rejects_an_unlikely_runner_up():
+    # Drafted child (token 1) is in the top-2 but far below the argmax: exp(1-20) ~ 5e-9 of
+    # its mass. The plausibility gate rejects it and corrects to the argmax, even though a
+    # blunt top_k=2 would have accepted it.
+    tree = DraftTree.chain([0, 1])
+    logits = np.array([20.0, 1.0, 0.0, 0.0])
+    assert pick_child(tree, 0, logits, 0, None, top_k=2, min_prob_ratio=0.5) == (0, None)
+
+
+def test_prob_ratio_gate_accepts_a_near_tie():
+    # Drafted child (token 1) is a near-tie with the argmax (exp(-0.1) ~ 0.9 of its mass),
+    # so at ratio 0.5 it clears the plausibility floor and is accepted; at a strict 0.95 it
+    # does not -- the gate is the top-1-vs-runner-up margin, exactly the drift signal.
+    tree = DraftTree.chain([0, 1])
+    logits = np.array([2.0, 1.9, 0.0, 0.0])
+    assert pick_child(tree, 0, logits, 0, None, top_k=2, min_prob_ratio=0.5) == (1, 1)
+    assert pick_child(tree, 0, logits, 0, None, top_k=2, min_prob_ratio=0.95) == (0, None)
+
+
 def test_loose_acceptance_never_accepts_fewer_than_lossless():
     prompt = [0, 1, 2, 3, 0, 1, 2, 3, 0, 1]  # repetitive -> pld fires
     drafter = lambda: make_drafter("pld")  # noqa: E731
