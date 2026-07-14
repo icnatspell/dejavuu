@@ -44,6 +44,18 @@ class DecodeSpec(BaseModel):
     seed: int = 0
     tree: bool = False
     width: int = Field(2, ge=1)
+    # Loose (lossy) top-k acceptance: 1 = exact lossless (default); >1 accepts a drafted
+    # token in the target's top-k, trading token identity for speed. Quality cost is
+    # measured against the greedy baseline via the response scorers.
+    accept_top_k: int = Field(1, ge=1)
+    # FLy-style entropy gate (0 = off): only loosen where the target's normalized entropy
+    # exceeds this; confident positions stay exact, so the top-k rule cannot accept an
+    # unlikely runner-up. Composes with accept_top_k. Superseded by accept_min_prob_ratio.
+    accept_entropy_gate: float = Field(0.0, ge=0.0, le=1.0)
+    # Plausibility gate (0 = off): accept a non-argmax draft only when its probability is
+    # >= this factor of the argmax's (a near-tie). Sharper than the entropy gate at
+    # bounding drift; the recommended lever. Composes with accept_top_k.
+    accept_min_prob_ratio: float = Field(0.0, ge=0.0, le=1.0)
 
 
 class MeasurementSpec(BaseModel):

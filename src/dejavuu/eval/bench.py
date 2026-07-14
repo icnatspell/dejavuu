@@ -67,6 +67,31 @@ def _parser(default_dataset: str | None) -> argparse.ArgumentParser:
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--tree", action="store_true")
     parser.add_argument("--width", type=int, default=2)
+    parser.add_argument(
+        "--accept-top-k",
+        type=int,
+        default=1,
+        help="loose (lossy) acceptance: 1 = exact lossless (default); >1 accepts a "
+        "drafted token in the target's top-k, trading token identity for speed "
+        "(quality cost is measured against the greedy baseline via response scorers)",
+    )
+    parser.add_argument(
+        "--accept-entropy-gate",
+        type=float,
+        default=0.0,
+        help="FLy-style gate (0-1, 0=off): only apply --accept-top-k where the target's "
+        "normalized entropy exceeds this, so confident positions stay exact "
+        "(superseded by --accept-min-prob-ratio)",
+    )
+    parser.add_argument(
+        "--accept-min-prob-ratio",
+        type=float,
+        default=0.0,
+        help="plausibility gate (0-1, 0=off): accept a non-argmax draft only when its "
+        "probability is >= this factor of the argmax's (a near-tie). Sharper than the "
+        "entropy gate at bounding semantic drift; the recommended lever "
+        "(recommended loose recipe: --accept-top-k 3 --accept-min-prob-ratio 0.3)",
+    )
     parser.add_argument("--warmups", type=int, default=1)
     parser.add_argument("--repetitions", type=int, default=1)
     parser.add_argument("--order-seed", type=int, default=0)
@@ -128,6 +153,9 @@ def _run_spec(args: argparse.Namespace) -> RunSpec:
             seed=args.seed,
             tree=args.tree,
             width=args.width,
+            accept_top_k=args.accept_top_k,
+            accept_entropy_gate=args.accept_entropy_gate,
+            accept_min_prob_ratio=args.accept_min_prob_ratio,
         ),
         measurement=MeasurementSpec(
             warmups=args.warmups,

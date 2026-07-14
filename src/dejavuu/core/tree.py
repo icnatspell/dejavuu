@@ -59,27 +59,115 @@ def mask(parent: list[int], past_len: int) -> np.ndarray:
     return bias
 
 
+def normalized_entropy(logits_row: np.ndarray) -> float:
+    """Shannon entropy of softmax(logits), normalized to [0, 1] by log(vocab). 0 means
+    one token dominates (confident); 1 means a uniform distribution (maximally uncertain)."""
+    e = np.exp(logits_row - logits_row.max())
+    p = e / e.sum()
+    h = float(-(p * np.log(p + 1e-12)).sum())
+    return h / np.log(len(logits_row))
+
+
+def pick_child(
+    tree: DraftTree,
+    node: int,
+    logits_row: np.ndarray,
+    position: int,
+    sampler: Sampler | None,
+    top_k: int,
+    entropy_gate: float = 0.0,
+    min_prob_ratio: float = 0.0,
+) -> tuple[int, int | None]:
+    """One acceptance step, shared by the chain and tree descents. Returns
+    (token_to_emit, child_to_descend_into); child None means stop (the token is the
+    bonus/correction).
+
+    Lossless (``top_k == 1`` or any ``sampler``): emit the model's pick -- greedy
+    argmax or a position-seeded draw -- and descend only into the child equal to it.
+    This is the exact greedy/coupling acceptance and the ONLY path the model-free
+    conformance suite exercises; it must stay bit-exact.
+
+    Loose (``top_k > 1``, greedy only): accept a drafted child whose token lies in the
+    model's top-k, preferring the most probable such child. This trades token identity
+    for speed and is opt-in -- callers measure the quality cost via the response scorers.
+    Falls back to the argmax correction when no child qualifies.
+
+    Plausibility gate (``min_prob_ratio > 0``): accept a non-argmax drafted child only
+    when it is a genuine near-tie -- its probability is at least ``min_prob_ratio`` times
+    the argmax's, i.e. ``logit[tok] >= max_logit + log(min_prob_ratio)`` (no softmax
+    needed). This is the sharp version of the entropy gate: full-vocab entropy is nearly
+    always low for a peaked LM, so it can't tell a plausible runner-up from an unlikely
+    one, whereas the top-1-vs-runner-up margin directly measures the drift risk of a
+    substitution. Set close to 1.0 for near-exact, lower to accept more.
+
+    Entropy gate (``entropy_gate > 0``, FLy-style): loosen *only* where the target is
+    uncertain. At a position whose normalized entropy is below the gate the model is
+    confident, so acceptance is demoted to exact (top-1). Superseded by
+    ``min_prob_ratio`` for drift control; kept for comparison sweeps.
+    """
+    k = top_k
+    if (
+        sampler is None
+        and top_k > 1
+        and entropy_gate > 0.0
+        and normalized_entropy(logits_row) < entropy_gate
+    ):
+        k = 1  # confident position -> stay exact
+    if sampler is None and k > 1:
+        kk = min(k, len(logits_row))
+        topk = {int(t) for t in np.argpartition(-logits_row, kk - 1)[:kk]}
+        # Probability-ratio floor: a runner-up must be within `min_prob_ratio` of the
+        # argmax to be a safe substitution. -inf disables the floor (argmax always clears
+        # it, so an exact-match child is never filtered).
+        floor = (
+            -np.inf
+            if min_prob_ratio <= 0.0
+            else float(logits_row.max()) + float(np.log(min_prob_ratio))
+        )
+        best, best_logit = None, -np.inf
+        for c in tree.children(node):
+            tok = tree.token_ids[c]
+            if tok in topk and logits_row[tok] >= floor and logits_row[tok] > best_logit:
+                best, best_logit = c, logits_row[tok]
+        if best is not None:
+            return tree.token_ids[best], best
+        return int(logits_row.argmax()), None
+    pred = pick(logits_row, position, sampler)
+    child = next((c for c in tree.children(node) if tree.token_ids[c] == pred), None)
+    return pred, child
+
+
 def accept(
     tree: DraftTree,
     logits: np.ndarray,
     sampler: Sampler | None = None,
     base_pos: int = 0,
+    top_k: int = 1,
+    entropy_gate: float = 0.0,
+    min_prob_ratio: float = 0.0,
 ) -> tuple[list[int], int, list[int]]:
-    """Descent over the tree (same rule as the chain accept): follow the child whose
-    token matches the model's prediction -- argmax, or a position-seeded draw under
-    `sampler` -- until none does. `base_pos` is the root's absolute position; the
-    token predicted at depth d lives at base_pos+d+1, seeding its draw. Returns
+    """Descent over the tree via `pick_child`. `base_pos` is the root's absolute
+    position; the token at depth d lives at base_pos+d+1, seeding its draw. Returns
     (emitted tokens incl. bonus, #guesses accepted, accepted node indices incl. root).
-    The node-index path drives the KV gather; for a chain it is [0,1,..,n_acc]."""
+    The node-index path drives the KV gather; for a chain it is [0,1,..,n_acc].
+    `top_k > 1` enables loose (lossy) acceptance; `min_prob_ratio`/`entropy_gate` gate
+    it -- see `pick_child`."""
     emitted: list[int] = []
     path = [0]
     node = 0
     while True:
-        pred = pick(logits[node], base_pos + len(emitted) + 1, sampler)
-        child = next((c for c in tree.children(node) if tree.token_ids[c] == pred), None)
+        tok, child = pick_child(
+            tree,
+            node,
+            logits[node],
+            base_pos + len(emitted) + 1,
+            sampler,
+            top_k,
+            entropy_gate,
+            min_prob_ratio,
+        )
+        emitted.append(tok)
         if child is None:
-            emitted.append(pred)  # bonus / correction token
             return emitted, len(emitted) - 1, path
-        emitted.append(pred)
         path.append(child)
         node = child

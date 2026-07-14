@@ -161,6 +161,13 @@ The drafters are lossless under greedy decoding: they only choose tokens to prop
 while the verifier decides what is emitted. Every method emits a chain by default and a branching tree under `--tree`
 (`pld_plus` and `anpd` fall back to a chain, since neither has a natural fork).
 
+For workloads that can trade some exactness for speed, an **opt-in loose (lossy)
+verification** mode relaxes the accept rule: `--accept-top-k` accepts a drafted token in
+the target's top-k, and `--accept-min-prob-ratio` gates that to genuine near-ties so
+meaning is preserved. It is off by default (the lossless path above is unchanged), and
+`scripts/rescore.py` judges the quality cost by *meaning* rather than character overlap.
+See [docs/methods.md](docs/methods.md) → "Loose (lossy) verification".
+
 ## How it works
 
 Each decode step drafts several tokens, verifies them in one forward pass, and keeps
