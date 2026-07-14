@@ -16,3 +16,6 @@ data/
 .ruff_cache/
 .pytest_cache/
 .coverage
+
+# ORT profiler dumps (enable_profiling writes to cwd)
+onnxruntime_profile__*.json
