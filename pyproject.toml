@@ -1,7 +1,7 @@
 [project]
 # The distribution and import package intentionally share the same name.
 name = "dejavuu"
-version = "0.1.0"
+version = "0.2.0"
 description = "Retrieval-based speculative decoding for ONNX Runtime and Hugging Face transformers"
 readme = "README.md"
 license = "MIT"

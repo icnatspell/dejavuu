@@ -6,7 +6,24 @@ All notable changes to this project are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-07-14
+
 ### Added
+- **New drafters**, all registered in `DRAFTERS` (so they wire into the CLI, both
+  benches, and the chain/tree conformance suite automatically): `copyspec`
+  (earliest-occurrence k-gram continuation copying), `cacheback` (bounded online n-gram
+  cache, plus loadable versioned frozen tables via `Cacheback.from_frozen` /
+  `tools.build_cacheback_table`), `logit_spec` (verifier-logit candidates extended by
+  n-gram retrieval), `ngram_trie` (prompt continuation trie with deep tree branches),
+  `stand` (Gumbel-ranked sampled tree drafting), and a `hybrid` family (retrieval with a
+  verifier-logit fallback, plus grafted-merge and tail-extension variants).
+- **GPU decode path.** Device-resident KV via ONNX Runtime io-binding keeps the KV on the
+  accelerator across steps for chain and tree (`OrtDecoder(device_kv=True)`, auto-enabled
+  on `provider=cuda`; the CPU/numpy path stays byte-identical and conformance untouched).
+  genai fused chain variants (`int4_genai` primary, `fp16_genai` fallback) built by
+  `dejavuu.tools.build_genai_chain`, each gated on batched-vs-incremental self-consistency
+  and top-1 fidelity vs the eager fp32 reference. Guarded CUDA runtime-library preload and
+  a per-run draft-source attribution counter for the hybrid methods.
 - Loose (lossy) verification: an opt-in accept rule that trades token identity for speed.
   `accept_top_k > 1` accepts a drafted token in the target's top-k; `accept_min_prob_ratio`
   is a plausibility gate that only accepts a non-argmax draft when its probability is within
@@ -29,13 +46,20 @@ All notable changes to this project are recorded here. The format follows
   quality. Ships a stdlib `text_similarity` (alignment-based) scorer; register more in
   `SCORERS`.
 
-- Unified benchmark runner with validated run specifications, full-conversation dataset
-  adapters, independent text/VLM model adapters, warm/cold memory modes, repetitions,
-  cache scopes, balanced method scheduling, and immutable result bundles.
+- Unified reproducible benchmark runner with validated run specifications, full-conversation
+  dataset adapters, independent text/VLM model adapters, warm/cold memory modes,
+  repetitions, cache scopes, balanced method scheduling, and immutable result bundles.
+  Adds SPEED-Bench support, benchmarking of built tree decoders, per-prompt progress
+  logging, and recorded run-time metadata.
 - Pinned SpecBench, SPEED-Bench, MMSpec, Gemma, and SmolVLM source revisions plus
   recursive model-artifact integrity manifests and manifest-selected ONNX graph roles.
 - Separate response, failure, and phase-measurement JSONL records, including selected
   VLM graph and external-decoder provenance in every run bundle.
+- A `learn` profiler phase timing the post-verify drafter callbacks (`observe`/`update`),
+  partitioning the decode total alongside `prefill/draft/verify/overhead`.
+- `scripts/gap_rank.py`: ranks methods across a sweep by speedup and labels each one's
+  dominant reducible gap (acceptance / learn / overhead / verify-bound) from the phase split.
+- CI publishes a GitHub release when a `v*` tag is pushed.
 
 ### Changed
 - Benchmark throughput now excludes model preparation, KV prefill, and per-request
@@ -49,6 +73,10 @@ All notable changes to this project are recorded here. The format follows
 - Decoder builds now measure batched-causal versus incremental KV-cache agreement and
   mark sequence-length-sensitive quantized variants incompatible with strict
   speculative benchmarks.
+- `pld` default `n_max` 3->4 and `copyspec` now tries shorter k-grams, both raising
+  acceptance on int8 where the gains convert to speedup.
+- Benchmark internals refactored: shared text/VLM benchmark loops and the removal of the
+  dead legacy `run_cases` path. Method fidelity matrix documented (`docs/method-fidelity.md`).
 
 ### Fixed
 - `asd_verify`'s verify-aware draft sizing no longer collapses to length-1 drafts on
@@ -112,5 +140,6 @@ First public release of `dejavuu`.
 ### Removed
 - Unused `num2words` dependency.
 
-[Unreleased]: https://github.com/icnatspell/dejavuu/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/icnatspell/dejavuu/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/icnatspell/dejavuu/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/icnatspell/dejavuu/releases/tag/v0.1.0
