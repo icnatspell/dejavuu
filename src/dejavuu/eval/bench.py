@@ -89,7 +89,8 @@ def _parser(default_dataset: str | None) -> argparse.ArgumentParser:
         default=0.0,
         help="plausibility gate (0-1, 0=off): accept a non-argmax draft only when its "
         "probability is >= this factor of the argmax's (a near-tie). Sharper than the "
-        "entropy gate at bounding semantic drift; the recommended lever",
+        "entropy gate at bounding semantic drift; the recommended lever "
+        "(recommended loose recipe: --accept-top-k 3 --accept-min-prob-ratio 0.3)",
     )
     parser.add_argument("--warmups", type=int, default=1)
     parser.add_argument("--repetitions", type=int, default=1)

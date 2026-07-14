@@ -7,6 +7,16 @@ All notable changes to this project are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
+- Loose (lossy) verification: an opt-in accept rule that trades token identity for speed.
+  `accept_top_k > 1` accepts a drafted token in the target's top-k; `accept_min_prob_ratio`
+  is a plausibility gate that only accepts a non-argmax draft when its probability is within
+  that factor of the argmax (a near-tie), directly bounding semantic drift. Off by default
+  (`accept_top_k=1` stays exact and bit-exact under conformance). On SPEED-Bench qualitative
+  (Qwen3-0.6B fp32, tree, budget 4), `--accept-top-k 3 --accept-min-prob-ratio 0.3` is a
+  Pareto win over bare top-k -- higher decode speedup (1.66x vs 1.60x) and higher semantic
+  fidelity at nearly equal acceptance. `scripts/rescore.py` re-scores existing bundles by
+  meaning (model2vec static embeddings) so divergent output is judged on semantics, not
+  character overlap. See `docs/methods.md` -> "Loose (lossy) verification".
 - Token divergence from the baseline is recorded as a diagnostic and never fails a
   benchmark run. The runner writes first-divergence position, exact-match, and overlap
   to `divergences.jsonl`, marks the bundle `valid_with_divergences`, and keeps measuring

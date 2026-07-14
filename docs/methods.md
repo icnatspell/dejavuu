@@ -267,3 +267,51 @@ method sweep.
 
 All of these are lossless under greedy decoding. Retrieval only chooses which tokens to
 propose and how many. The verifier alone decides what is actually emitted.
+
+## Loose (lossy) verification
+
+Everything above keeps the exact greedy accept rule: a drafted token is accepted only if
+it *is* the token the target would have produced. Loose verification deliberately relaxes
+that rule to accept more per step, trading token identity for speed. It is **opt-in and
+off by default** -- the lossless path (the repo's headline guarantee) is untouched unless
+you turn these knobs on. Two compose:
+
+- `--accept-top-k K` (`accept_top_k`, default 1 = lossless): accept a drafted token when
+  it is among the target's top-`K`, not just the argmax. Higher `K` accepts more but drifts
+  further from the baseline.
+- `--accept-min-prob-ratio R` (`accept_min_prob_ratio`, default 0 = off): a *plausibility
+  gate*. Accept a non-argmax draft only when its probability is at least `R`x the argmax's
+  -- i.e. a genuine near-tie the target itself was unsure about. Implemented as a logit
+  margin (`logit[tok] >= max_logit + log R`), so it costs nothing. This is the lever that
+  keeps meaning intact: it filters the confident-but-wrong substitutions that a bare top-k
+  would wave through. (An older `--accept-entropy-gate` gates on full-vocab entropy instead;
+  it is kept for comparison but superseded -- a peaked LM's entropy is near-zero almost
+  everywhere, so it cannot tell a plausible runner-up from an unlikely one.)
+
+Because loose output diverges from the greedy baseline on purpose, character-level metrics
+(the default `text_similarity`) understate it badly: an early divergence that stays on-topic
+scores near zero. Judge loose runs by **meaning** with `scripts/rescore.py`, which re-scores
+existing bundles with static-embedding cosine (`uv pip install model2vec`).
+
+**Measured (SPEED-Bench qualitative, Qwen3-0.6B fp32, tree, budget 4, top-k 3):**
+
+| setting | acceptance | decode speedup | semantic vs baseline (pld / suffix / copyspec) |
+| --- | --- | --- | --- |
+| lossless (k=1) | 0.30 | 1.46x | 1.00 / 1.00 / 1.00 |
+| top-k 3, no gate | 0.40 | 1.60x | 0.91 / 0.90 / 0.96 |
+| top-k 3, ratio **0.3** | 0.38 | **1.66x** | **0.93 / 0.92 / 0.96** |
+| top-k 3, ratio 0.7 | 0.36 | 1.53x | 0.93 / 0.93 / 0.96 |
+
+Two things to take from this. First, the plausibility gate at `R = 0.3` is a *Pareto win*
+over bare top-k: higher speedup, higher semantic fidelity, barely lower acceptance -- so it
+is the recommended loose setting. Second, fidelity **plateaus** around 0.93 for `pld` /
+`suffix_decoding`: tightening `R` past 0.3 buys almost no extra meaning while it costs
+acceptance and speed. That residual gap is not implausible runner-ups (those are already
+filtered) but locally-plausible near-ties that *compound* into divergent meaning over the
+following tokens -- a per-position gate cannot see that. `copyspec` sits highest (~0.96)
+because it copies contiguous spans and so diverges least to begin with.
+
+**Recommended loose recipe:** `--accept-top-k 3 --accept-min-prob-ratio 0.3` on `copyspec`.
+If you need `pld` / `suffix_decoding` above ~0.93 semantic, that calls for downstream
+(windowed) verification rather than a sharper single-position gate -- see the "deferred
+window" note in the tracking issue for FLy loose verification.
