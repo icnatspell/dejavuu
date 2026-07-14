@@ -132,6 +132,11 @@ exclude_lines = [
 known_first_party = ["dejavuu"]
 
 [tool.deptry.per_rule_ignores]
+# model2vec powers scripts/rescore.py (offline semantic re-score). It is a dev-only tool,
+# deliberately undeclared so the package stays torch-free; installed ad hoc with
+# `uv pip install model2vec`, so it reads as missing (DEP001) or transitive (DEP003).
+DEP001 = ["model2vec"]
+DEP003 = ["model2vec"]
 DEP002 = [
     # self-referencing extras (bench/build depend on dejavuu[vlm]); not an import.
     "dejavuu",
