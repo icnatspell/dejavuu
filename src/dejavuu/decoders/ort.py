@@ -29,10 +29,56 @@ from pathlib import Path
 import numpy as np
 import onnxruntime as ort
 
-from dejavuu.core.verifier import KVCache
+from dejavuu.core.verifier import KVCache, gather_kv, trim_kv
 
 _PAST = re.compile(r"past_key_values\.(\d+)\.(?:key|value)")
 _NP = {"tensor(float)": np.float32, "tensor(float16)": np.float16}
+_ONNX_DTYPE = {np.float32: 1, np.float16: 10}  # TensorProto.FLOAT / FLOAT16
+
+
+def make_gather_session(np_dtype: type, providers: list[str]) -> ort.InferenceSession:
+    """A one-node Gather(axis=2) graph that trims/reorders a KV tensor [1,h,seq,d] along
+    the sequence axis on-device. Both accept paths reduce to this: chain rollback gathers
+    the contiguous committed prefix `arange(len)`, tree accept gathers the committed rows
+    plus the accepted path's scattered rows. Kept as its own tiny session because a KV
+    prefix in [1,h,seq,d] layout is *not* contiguous (heads are the outer axis), so it
+    can't be trimmed by a cheap reshape -- it needs an actual gather kernel."""
+    from onnx import TensorProto, helper
+
+    tp = _ONNX_DTYPE[np_dtype]
+    data = helper.make_tensor_value_info("data", tp, [1, None, None, None])
+    idx = helper.make_tensor_value_info("idx", TensorProto.INT64, [None])
+    out = helper.make_tensor_value_info("out", tp, [1, None, None, None])
+    node = helper.make_node("Gather", ["data", "idx"], ["out"], axis=2)
+    graph = helper.make_graph([node], "kv_gather", [data, idx], [out])
+    model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 18)])
+    return ort.InferenceSession(model.SerializeToString(), providers=providers)
+
+
+def device_gather(
+    sess: ort.InferenceSession,
+    kv: list[tuple[ort.OrtValue, ort.OrtValue]],
+    rows: np.ndarray,
+    device: str,
+) -> list[tuple[ort.OrtValue, ort.OrtValue]]:
+    """Gather `rows` along the seq axis of every layer's (key, value), keeping the result
+    device-resident. `kv` values are device OrtValues; the output stays on `device` so it
+    feeds straight back as the next step's past with no host round-trip.
+
+    ponytail: 2*n_layers tiny Gather launches per accept -- fine here (the forward is
+    launch-bound at ~18 ms; a handful of extra micro-kernels is noise). Batch the layers
+    into one gather only if a profile shows this bucket growing."""
+    idx = ort.OrtValue.ortvalue_from_numpy(np.ascontiguousarray(rows, np.int64), device, 0)
+
+    def one(t: ort.OrtValue) -> ort.OrtValue:
+        io = sess.io_binding()
+        io.bind_ortvalue_input("data", t)
+        io.bind_ortvalue_input("idx", idx)
+        io.bind_output("out", device)
+        sess.run_with_iobinding(io)
+        return io.get_outputs()[0]
+
+    return [(one(k), one(v)) for k, v in kv]
 
 
 def _causal_bias(n: int, past_len: int) -> np.ndarray:
@@ -85,6 +131,12 @@ def make_session(
 @dataclass
 class OrtDecoder:
     session: ort.InferenceSession
+    device_kv: bool = False
+    """Keep the KV cache as device-resident OrtValues across steps via io-binding, instead
+    of returning present KV as host numpy and re-uploading past KV each step. Off by default
+    so the CPU/numpy path (and conformance) is byte-identical; enabled for `provider=cuda`
+    where the host<->device copy dominates the verify forward (issue #46). Works on the CPU
+    EP too (device string follows the session), which is how it's tested without a GPU."""
 
     def __post_init__(self) -> None:
         """Fail clearly at load if the graph isn't a conventional KV-cache causal
@@ -129,6 +181,22 @@ class OrtDecoder:
         return int(arg.shape[1]), int(arg.shape[3]), _NP.get(arg.type, np.float32)
 
     @cached_property
+    def _device(self) -> str:
+        """ORT device string for io-binding: 'cuda' when the session runs on the CUDA
+        provider, else 'cpu'. Lets the device_kv path (and its Gather session) run on the
+        CPU EP for testing without a GPU."""
+        return "cuda" if "CUDAExecutionProvider" in self.session.get_providers() else "cpu"
+
+    @cached_property
+    def _gather_sess(self) -> ort.InferenceSession:
+        providers = (
+            ["CUDAExecutionProvider", "CPUExecutionProvider"]
+            if self._device == "cuda"
+            else ["CPUExecutionProvider"]
+        )
+        return make_gather_session(self._kv[2], providers)
+
+    @cached_property
     def _present_idx(self) -> list[tuple[int, int]]:
         return [
             (self._out.index(f"present.{i}.key"), self._out.index(f"present.{i}.value"))
@@ -159,9 +227,32 @@ class OrtDecoder:
 
     def empty_kv(self) -> KVCache:
         h, d, dt = self._kv
-        return [
-            (np.zeros((1, h, 0, d), dt), np.zeros((1, h, 0, d), dt)) for _ in range(self.n_layers)
-        ]
+        z = np.zeros((1, h, 0, d), dt)
+        if self.device_kv:
+            return [
+                (
+                    ort.OrtValue.ortvalue_from_numpy(z, self._device, 0),
+                    ort.OrtValue.ortvalue_from_numpy(z, self._device, 0),
+                )
+                for _ in range(self.n_layers)
+            ]
+        return [(z.copy(), z.copy()) for _ in range(self.n_layers)]
+
+    def rollback_kv(self, present: KVCache, committed: int) -> KVCache:
+        """Chain accept: keep the first `committed` positions. numpy trim by default;
+        on-device Gather when device_kv (delegated to by the Verifier)."""
+        if not self.device_kv:
+            return trim_kv(present, committed)
+        return device_gather(
+            self._gather_sess, present, np.arange(committed, dtype=np.int64), self._device
+        )
+
+    def gather_kv(self, present: KVCache, committed: int, path: list[int]) -> KVCache:
+        """Tree accept: keep committed rows + the accepted path's scattered rows."""
+        if not self.device_kv:
+            return gather_kv(present, committed, path)
+        rows = np.r_[:committed, committed + np.asarray(path)]
+        return device_gather(self._gather_sess, present, rows, self._device)
 
     def run(
         self,
@@ -174,6 +265,8 @@ class OrtDecoder:
         """One forward pass. `primary` is token ids (text) or [N, hidden] embeds (VLM),
         per `takes_embeds`. Returns logits[N, vocab], present KV (len past_len+N), and
         hidden states[N, H] if the graph emits them (else None)."""
+        if self.device_kv:
+            return self._run_bound(primary, past, past_len, position_ids, attn_bias)
         if self.takes_embeds:
             x = np.asarray(primary, np.float32)[None]
         else:
@@ -204,4 +297,55 @@ class OrtDecoder:
         logits = outs[self._logits_idx][0]
         present = [(outs[ki], outs[vi]) for ki, vi in self._present_idx]
         hidden = outs[self._hidden_idx][0] if self._hidden_idx is not None else None
+        return logits, present, hidden
+
+    def _run_bound(
+        self,
+        primary: list[int] | np.ndarray,
+        past: KVCache,
+        past_len: int,
+        position_ids: np.ndarray | None,
+        attn_bias: np.ndarray | None,
+    ) -> tuple[np.ndarray, KVCache, np.ndarray | None]:
+        """io-bound forward: past KV are device OrtValues bound directly as inputs and
+        present KV outputs stay on-device (no host round-trip -- the win at real seq
+        lengths). The small inputs (ids/mask/positions/bias) are cheap to upload each step,
+        and logits/hidden are pulled back to host because sampling and drafter callbacks
+        run there. Numerically identical to `run`; it only moves where the KV lives."""
+        if self.takes_embeds:
+            x = np.asarray(primary, np.float32)[None]
+        else:
+            x = np.asarray([primary], np.int64)
+        n = x.shape[1]
+        io = self.session.io_binding()
+        io.bind_cpu_input(self.primary, x)
+        if "attention_mask" in self._in:
+            io.bind_cpu_input("attention_mask", np.ones((1, past_len + n), np.int64))
+        if "position_ids" in self._in:
+            pos = (
+                position_ids
+                if position_ids is not None
+                else np.arange(past_len, past_len + n, dtype=np.int64)[None]
+            )
+            io.bind_cpu_input("position_ids", np.ascontiguousarray(pos, np.int64))
+        if self._tree_mask_input is not None:
+            bias = attn_bias if attn_bias is not None else _causal_bias(n, past_len)
+            io.bind_cpu_input(self._tree_mask_input, np.ascontiguousarray(bias, np.float32))
+        elif attn_bias is not None:
+            raise NotImplementedError(
+                "decoder has no 4D additive-mask input -- tree attention needs a "
+                "re-export with position_ids + a 4D mask (model contract)."
+            )
+        for i, (k, v) in enumerate(past):
+            io.bind_ortvalue_input(f"past_key_values.{i}.key", k)
+            io.bind_ortvalue_input(f"past_key_values.{i}.value", v)
+        for name in self._out:
+            # KV stays on device to feed the next step; logits/hidden go to host for
+            # sampling and drafter observe().
+            io.bind_output(name, self._device if name.startswith("present") else "cpu")
+        self.session.run_with_iobinding(io)
+        outs = io.get_outputs()
+        logits = outs[self._logits_idx].numpy()[0]
+        present = [(outs[ki], outs[vi]) for ki, vi in self._present_idx]
+        hidden = outs[self._hidden_idx].numpy()[0] if self._hidden_idx is not None else None
         return logits, present, hidden
